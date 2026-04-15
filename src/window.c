@@ -2,10 +2,12 @@
 #include <adwaita.h>
 #include "window.h"
 #include "actions.h"
+#include "ssh.h"
 #include <glib/gstdio.h>
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 #include <sys/stat.h>
 
 /* ── Theme definitions (same as note-light) ── */
@@ -488,13 +490,16 @@ static gboolean on_key_pressed(GtkEventControllerKey *ctrl, guint keyval,
     gboolean shift = (state & GDK_SHIFT_MASK) != 0;
     gsize old_pos = win->cursor_pos;
 
+    if (win->data_len == 0) return FALSE;  /* no navigation on empty data */
+
     switch (keyval) {
     case GDK_KEY_Left:
         if (win->cursor_pos > 0) win->cursor_pos--;
         win->cursor_nibble = 0;
         break;
     case GDK_KEY_Right:
-        if (win->cursor_pos < win->data_len - 1) win->cursor_pos++;
+        if (win->data_len > 0 && win->cursor_pos < win->data_len - 1)
+            win->cursor_pos++;
         win->cursor_nibble = 0;
         break;
     case GDK_KEY_Up:
@@ -512,12 +517,15 @@ static gboolean on_key_pressed(GtkEventControllerKey *ctrl, guint keyval,
             win->cursor_pos = win->cursor_pos % (gsize)bpr;
         win->cursor_nibble = 0;
         break;
-    case GDK_KEY_Page_Down:
-        win->cursor_pos += (gsize)(bpr * win->visible_rows);
-        if (win->cursor_pos >= win->data_len && win->data_len > 0)
+    case GDK_KEY_Page_Down: {
+        gsize page = (gsize)(bpr * win->visible_rows);
+        if (win->cursor_pos + page < win->data_len)
+            win->cursor_pos += page;
+        else if (win->data_len > 0)
             win->cursor_pos = win->data_len - 1;
         win->cursor_nibble = 0;
         break;
+    }
     case GDK_KEY_Home:
         if (state & GDK_CONTROL_MASK)
             win->cursor_pos = 0;
@@ -538,7 +546,7 @@ static gboolean on_key_pressed(GtkEventControllerKey *ctrl, guint keyval,
         break;
     default:
         /* Editing in data pane */
-        if (!win->editing_ascii && win->data_len > 0 && win->cursor_pos <= win->data_len) {
+        if (!win->editing_ascii && win->cursor_pos <= win->data_len) {
             /* Auto-grow buffer if cursor is at end */
             if (win->cursor_pos == win->data_len) {
                 if (win->data_len >= win->data_alloc) {
@@ -595,7 +603,7 @@ static gboolean on_key_pressed(GtkEventControllerKey *ctrl, guint keyval,
         }
 
         /* ASCII editing */
-        if (win->editing_ascii && win->data_len > 0 &&
+        if (win->editing_ascii &&
             keyval >= 0x20 && keyval <= 0x7E && win->cursor_pos <= win->data_len) {
             if (win->cursor_pos == win->data_len) {
                 if (win->data_len >= win->data_alloc) {
@@ -724,14 +732,20 @@ void hex_window_load_file(HexWindow *win, const char *path) {
 
     unsigned char *buf = g_malloc(file_size);
     gsize len = fread(buf, 1, file_size, fp);
+    gboolean read_err = ferror(fp);
     fclose(fp);
+
+    if (read_err || len == 0) {
+        g_free(buf);
+        return;
+    }
 
     g_free(win->data);
     g_free(win->original_data);
 
     win->data = buf;
     win->data_len = len;
-    win->data_alloc = file_size;
+    win->data_alloc = len;
     win->original_data = g_memdup2(buf, len);
     win->original_len = len;
     win->dirty = FALSE;
@@ -764,21 +778,24 @@ static void parse_hex_string(const char *str, unsigned char **out, int *out_len)
     *out = NULL;
     *out_len = 0;
     int slen = (int)strlen(str);
-    unsigned char *buf = g_malloc(slen);
+    if (slen <= 0) return;
+    /* Max output is slen/2 + 1 hex bytes; allocate conservatively */
+    int alloc = slen / 2 + 1;
+    unsigned char *buf = g_malloc(alloc);
     int n = 0;
 
     for (int i = 0; i < slen; ) {
         while (i < slen && (str[i] == ' ' || str[i] == ',')) i++;
         if (i >= slen) break;
         if (i + 1 < slen && isxdigit((unsigned char)str[i]) && isxdigit((unsigned char)str[i+1])) {
-            unsigned int val;
-            sscanf(str + i, "%2x", &val);
-            buf[n++] = (unsigned char)val;
+            unsigned int val = 0;
+            if (sscanf(str + i, "%2x", &val) == 1 && n < alloc)
+                buf[n++] = (unsigned char)(val & 0xFF);
             i += 2;
         } else if (isxdigit((unsigned char)str[i])) {
-            unsigned int val;
-            sscanf(str + i, "%1x", &val);
-            buf[n++] = (unsigned char)val;
+            unsigned int val = 0;
+            if (sscanf(str + i, "%1x", &val) == 1 && n < alloc)
+                buf[n++] = (unsigned char)(val & 0xFF);
             i++;
         } else {
             /* Treat as ASCII text search */
@@ -804,12 +821,13 @@ static void do_search(HexWindow *win) {
     unsigned char *pattern;
     int plen;
     parse_hex_string(text, &pattern, &plen);
-    if (plen == 0 || !pattern) { g_free(pattern); return; }
+    if (plen <= 0 || plen > 4096 || !pattern) { g_free(pattern); return; }
 
     /* Find all matches */
+    gsize pat_len = (gsize)plen;
     GPtrArray *matches = g_ptr_array_new();
-    for (gsize i = 0; i + (gsize)plen <= win->data_len; i++) {
-        if (memcmp(win->data + i, pattern, (size_t)plen) == 0)
+    for (gsize i = 0; i + pat_len <= win->data_len; i++) {
+        if (memcmp(win->data + i, pattern, pat_len) == 0)
             g_ptr_array_add(matches, GSIZE_TO_POINTER(i));
     }
     g_free(pattern);
@@ -880,16 +898,18 @@ static void on_goto_entry_activate(GtkEntry *e, gpointer d) {
     const char *text = gtk_editable_get_text(GTK_EDITABLE(e));
     if (!text[0]) return;
 
+    char *endptr = NULL;
+    errno = 0;
     gsize offset;
-    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X'))
-        offset = (gsize)strtoull(text + 2, NULL, 16);
-    else if (strchr(text, 'A') || strchr(text, 'B') || strchr(text, 'C') ||
-             strchr(text, 'D') || strchr(text, 'E') || strchr(text, 'F') ||
-             strchr(text, 'a') || strchr(text, 'b') || strchr(text, 'c') ||
-             strchr(text, 'd') || strchr(text, 'e') || strchr(text, 'f'))
-        offset = (gsize)strtoull(text, NULL, 16);
+    if (text[0] == '0' && text[1] && (text[1] == 'x' || text[1] == 'X'))
+        offset = (gsize)strtoull(text + 2, &endptr, 16);
+    else if (strpbrk(text, "ABCDEFabcdef"))
+        offset = (gsize)strtoull(text, &endptr, 16);
     else
-        offset = (gsize)strtoull(text, NULL, 0);
+        offset = (gsize)strtoull(text, &endptr, 0);
+
+    if (errno == ERANGE || (endptr && *endptr != '\0' && endptr == text))
+        offset = 0;  /* invalid input, go to start */
 
     if (offset >= w->data_len && w->data_len > 0) offset = w->data_len - 1;
     w->cursor_pos = offset;
@@ -935,6 +955,136 @@ void hex_window_goto_offset(HexWindow *win) {
 
 /* ── Window construction ── */
 
+/* ── SSH/SFTP ── */
+
+gboolean hex_window_is_remote(HexWindow *win) {
+    return win->ssh_host[0] != '\0';
+}
+
+static void update_ssh_status(HexWindow *win) {
+    gboolean connected = hex_window_is_remote(win);
+    if (connected) {
+        char label[512];
+        snprintf(label, sizeof(label), "SSH: %s@%s", win->ssh_user, win->ssh_host);
+        gtk_button_set_label(GTK_BUTTON(win->ssh_status_btn), label);
+    } else {
+        gtk_button_set_label(GTK_BUTTON(win->ssh_status_btn), "SSH: Off");
+    }
+
+    GAction *a;
+    a = g_action_map_lookup_action(G_ACTION_MAP(win->window), "open-remote");
+    if (a) g_simple_action_set_enabled(G_SIMPLE_ACTION(a), connected);
+    a = g_action_map_lookup_action(G_ACTION_MAP(win->window), "sftp-disconnect");
+    if (a) g_simple_action_set_enabled(G_SIMPLE_ACTION(a), connected);
+}
+
+void hex_window_ssh_connect(HexWindow *win, const char *host, const char *user,
+                             int port, const char *key, const char *remote_path) {
+    if (hex_window_is_remote(win))
+        hex_window_ssh_disconnect(win);
+
+    g_strlcpy(win->ssh_host, host, sizeof(win->ssh_host));
+    g_strlcpy(win->ssh_user, user, sizeof(win->ssh_user));
+    win->ssh_port = port;
+    g_strlcpy(win->ssh_key, key, sizeof(win->ssh_key));
+    g_strlcpy(win->ssh_remote_path, remote_path, sizeof(win->ssh_remote_path));
+
+    snprintf(win->ssh_mount, sizeof(win->ssh_mount),
+             "/tmp/hex-editor-sftp-%d-%s@%s", (int)getpid(), user, host);
+
+    ssh_ctl_start(win->ssh_ctl_dir, sizeof(win->ssh_ctl_dir),
+                  win->ssh_ctl_path, sizeof(win->ssh_ctl_path),
+                  host, user, port, key);
+
+    update_ssh_status(win);
+}
+
+void hex_window_ssh_disconnect(HexWindow *win) {
+    if (!hex_window_is_remote(win)) return;
+
+    ssh_ctl_stop(win->ssh_ctl_path, win->ssh_ctl_dir,
+                 win->ssh_host, win->ssh_user);
+
+    win->ssh_host[0] = '\0';
+    win->ssh_user[0] = '\0';
+    win->ssh_port = 0;
+    win->ssh_key[0] = '\0';
+    win->ssh_remote_path[0] = '\0';
+    win->ssh_mount[0] = '\0';
+
+    update_ssh_status(win);
+}
+
+void hex_window_open_remote_file(HexWindow *win, const char *remote_path) {
+    char *contents = NULL;
+    gsize len = 0;
+
+    if (!ssh_cat_file(win->ssh_host, win->ssh_user, win->ssh_port,
+                      win->ssh_key, win->ssh_ctl_path,
+                      remote_path, &contents, &len, 64 * 1024 * 1024)) {
+        return;
+    }
+
+    g_free(win->data);
+    g_free(win->original_data);
+
+    win->data = (unsigned char *)contents;
+    win->data_len = len;
+    win->data_alloc = len;
+    win->original_data = g_memdup2(contents, len);
+    win->original_len = len;
+    win->dirty = FALSE;
+
+    win->cursor_pos = 0;
+    win->cursor_nibble = 0;
+    win->scroll_offset = 0;
+    win->selection_start = 0;
+    win->selection_end = 0;
+    win->editing_ascii = FALSE;
+
+    /* Store virtual path for save */
+    snprintf(win->current_file, sizeof(win->current_file), "%s%s",
+             win->ssh_mount, remote_path);
+
+    char *base = g_path_get_basename(remote_path);
+    char title[512];
+    snprintf(title, sizeof(title), "%s [%s@%s]", base, win->ssh_user, win->ssh_host);
+    gtk_window_set_title(GTK_WINDOW(win->window), title);
+    g_free(base);
+
+    hex_window_queue_redraw(win);
+}
+
+gboolean hex_window_save_remote(HexWindow *win) {
+    if (!hex_window_is_remote(win)) return FALSE;
+    if (!ssh_path_is_remote(win->current_file)) return FALSE;
+
+    char remote[4096];
+    ssh_to_remote_path(win->ssh_mount, win->ssh_remote_path,
+                       win->current_file, remote, sizeof(remote));
+
+    gboolean ok = ssh_write_file(win->ssh_host, win->ssh_user, win->ssh_port,
+                                  win->ssh_key, win->ssh_ctl_path,
+                                  remote, (const char *)win->data, win->data_len);
+
+    if (ok) {
+        g_free(win->original_data);
+        win->original_data = g_memdup2(win->data, win->data_len);
+        win->original_len = win->data_len;
+        win->dirty = FALSE;
+
+        char *base = g_path_get_basename(remote);
+        char title[512];
+        snprintf(title, sizeof(title), "%s [%s@%s]", base, win->ssh_user, win->ssh_host);
+        gtk_window_set_title(GTK_WINDOW(win->window), title);
+        g_free(base);
+    }
+
+    return ok;
+}
+
+/* ── Settings apply ── */
+
 void hex_window_apply_settings(HexWindow *win) {
     apply_theme(win);
     apply_css(win);
@@ -955,6 +1105,14 @@ static void save_window_state(HexWindow *win) {
 static void on_window_destroy(GtkWidget *widget, gpointer data) {
     (void)widget;
     HexWindow *win = data;
+    if (hex_window_is_remote(win))
+        hex_window_ssh_disconnect(win);
+    if (win->css_provider) {
+        gtk_style_context_remove_provider_for_display(
+            gdk_display_get_default(),
+            GTK_STYLE_PROVIDER(win->css_provider));
+        g_object_unref(win->css_provider);
+    }
     g_free(win->data);
     g_free(win->original_data);
     g_free(win->match_offsets);
@@ -1049,6 +1207,13 @@ HexWindow *hex_window_new(GtkApplication *app) {
     g_menu_append_section(menu, NULL, G_MENU_MODEL(view_section));
     g_object_unref(view_section);
 
+    GMenu *ssh_section = g_menu_new();
+    g_menu_append(ssh_section, "SSH Connect...", "win.sftp-connect");
+    g_menu_append(ssh_section, "Open Remote File...", "win.open-remote");
+    g_menu_append(ssh_section, "SSH Disconnect", "win.sftp-disconnect");
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(ssh_section));
+    g_object_unref(ssh_section);
+
     GMenu *settings_section = g_menu_new();
     g_menu_append(settings_section, "Settings...", "win.settings");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(settings_section));
@@ -1058,6 +1223,16 @@ HexWindow *hex_window_new(GtkApplication *app) {
     g_object_unref(menu);
 
     adw_header_bar_pack_end(ADW_HEADER_BAR(header), menu_btn);
+
+    /* SSH status button */
+    win->ssh_status_btn = gtk_button_new_with_label("SSH: Off");
+    gtk_widget_add_css_class(win->ssh_status_btn, "flat");
+    g_signal_connect_swapped(win->ssh_status_btn, "clicked",
+        G_CALLBACK(gtk_widget_activate_action_variant),
+        win->ssh_status_btn);
+    /* Clicking the button opens the SFTP dialog */
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(win->ssh_status_btn), "win.sftp-connect");
+    adw_header_bar_pack_start(ADW_HEADER_BAR(header), win->ssh_status_btn);
 
     /* Set header as titlebar */
     gtk_window_set_titlebar(GTK_WINDOW(win->window), header);

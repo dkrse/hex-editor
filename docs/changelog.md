@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.1.0 — 2026-04-15
+
+### SSH/SFTP Support
+- SSH Connect dialog with saved connection profiles (name, host, port, user, key)
+- Async SSH connection testing in background thread
+- Remote file browser with directory navigation via `ssh ls -1pA`
+- Remote file open via `ssh cat` (binary-safe)
+- Remote file save via `ssh tee` (binary-safe)
+- SSH ControlMaster for multiplexed connections
+- SSH status button in header bar showing connection state
+- Connections stored in `~/.config/hex-editor/connections.conf` (chmod 0600)
+
+### Security Fixes
+- **CRITICAL**: Fixed path traversal vulnerability in `ssh_to_remote_path` — now validates prefix match and rejects `..` components
+- **CRITICAL**: Fixed unchecked pointer arithmetic when converting remote paths
+- **HIGH**: Fixed potential heap buffer overflow in `parse_hex_string` — added bounds checking and proper allocation size
+- **HIGH**: Fixed `sscanf` without return value check — now validates parse success
+- **HIGH**: Fixed search pattern integer overflow — added `plen` limit (4096) and safe `gsize` cast
+- **MEDIUM**: Fixed CSS provider memory leak — now properly removed and unreffed on window destroy
+- **MEDIUM**: Fixed missing `ferror()` check after `fread` — buffer freed on read failure
+- **MEDIUM**: Fixed potential NULL dereference after `g_memdup2` — added NULL-safe handling
+- **MEDIUM**: Fixed `strtoull` without `errno` check in goto-offset — now validates with `errno` and `endptr`
+- **MEDIUM**: Fixed NULL dereference in SSH error dialog — defensive check for `err` pointer
+- **LOW**: Fixed unsigned underflow in Right arrow with empty file — early return when `data_len == 0`
+- **LOW**: Fixed Page Down overflow — safe addition with bounds check before increment
+- **LOW**: Fixed truncation warnings in SSH path buffers — enlarged to safe sizes
+
+### Improvements
+- New file starts with 0 bytes (was 1 dummy byte) — auto-grows from truly empty
+- Editing works from empty file in all modes (hex, binary, ASCII)
+
 ## v1.0.0 — 2026-04-15
 
 ### Initial Release

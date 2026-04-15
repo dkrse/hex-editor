@@ -48,6 +48,17 @@ typedef struct {
 
     /* Goto offset dialog */
     guint                 redraw_idle_id;
+
+    /* SSH/SFTP state */
+    char                  ssh_host[256];
+    char                  ssh_user[128];
+    int                   ssh_port;
+    char                  ssh_key[1024];
+    char                  ssh_remote_path[1024];
+    char                  ssh_mount[2048];
+    char                  ssh_ctl_path[512];
+    char                  ssh_ctl_dir[256];
+    GtkWidget            *ssh_status_btn;
 } HexWindow;
 
 HexWindow *hex_window_new(GtkApplication *app);
@@ -56,5 +67,12 @@ void       hex_window_load_file(HexWindow *win, const char *path);
 void       hex_window_show_search(HexWindow *win);
 void       hex_window_goto_offset(HexWindow *win);
 void       hex_window_queue_redraw(HexWindow *win);
+void       hex_window_ssh_connect(HexWindow *win, const char *host,
+                                   const char *user, int port,
+                                   const char *key, const char *remote_path);
+void       hex_window_ssh_disconnect(HexWindow *win);
+gboolean   hex_window_is_remote(HexWindow *win);
+void       hex_window_open_remote_file(HexWindow *win, const char *remote_path);
+gboolean   hex_window_save_remote(HexWindow *win);
 
 #endif
