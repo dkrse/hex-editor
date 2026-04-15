@@ -80,6 +80,10 @@ Settings are stored in `~/.config/hex-editor/settings.conf`.
 - [Architecture](docs/architecture.md)
 - [Changelog](docs/changelog.md)
 
+## Author
+
+krse
+
 ## License
 
 MIT
