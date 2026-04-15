@@ -897,7 +897,16 @@ static void remote_browse_populate(OpenRemoteCtx *ctx) {
     }
 
     if (!ok || !stdout_buf) {
-        GtkWidget *lbl = gtk_label_new("(failed to list directory)");
+        char errmsg[256];
+        snprintf(errmsg, sizeof(errmsg), "(failed to list: %s — ok=%d, buf=%p)",
+                 ctx->current_dir, ok, (void*)stdout_buf);
+        GtkWidget *lbl = gtk_label_new(errmsg);
+        gtk_list_box_append(ctx->file_list, lbl);
+        g_free(stdout_buf);
+        return;
+    }
+    if (stdout_buf[0] == '\0') {
+        GtkWidget *lbl = gtk_label_new("(empty directory)");
         gtk_list_box_append(ctx->file_list, lbl);
         g_free(stdout_buf);
         return;
