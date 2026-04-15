@@ -2,7 +2,6 @@
 
 A lightweight native hex editor built with GTK4 and libadwaita.
 
-![Icon](images/hex-editor.png)
 
 ## Features
 
