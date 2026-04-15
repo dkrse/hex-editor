@@ -84,7 +84,7 @@ static void apply_css(HexWindow *win) {
     css_escape_font(safe_font, sizeof(safe_font), win->settings.font);
     css_escape_font(safe_gui_font, sizeof(safe_gui_font), win->settings.gui_font);
 
-    char css[4096];
+    char css[5120];
     snprintf(css, sizeof(css),
         "window, window.background { background-color: %s; color: %s; }"
         ".hex-view { font-family: %s; font-size: %dpt; background-color: %s; color: %s; }"
@@ -249,7 +249,17 @@ static void ensure_cursor_visible(HexWindow *win) {
     else if (cursor_row >= win->scroll_offset + (gsize)win->visible_rows)
         win->scroll_offset = cursor_row - (gsize)win->visible_rows + 1;
 
-    gtk_adjustment_set_value(win->adj, (double)win->scroll_offset);
+}
+
+static void update_scroll_percent(HexWindow *win) {
+    gsize total = total_rows(win);
+    int pct = 0;
+    if (total > (gsize)win->visible_rows)
+        pct = (int)(win->scroll_offset * 100 / (total - (gsize)win->visible_rows));
+    if (pct > 100) pct = 100;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d%%", pct);
+    gtk_label_set_text(win->status_scroll, buf);
 }
 
 static void update_title(HexWindow *win) {
@@ -287,13 +297,8 @@ static void draw_hex_view(GtkDrawingArea *area, cairo_t *cr,
     win->visible_rows = height / win->row_height;
     if (win->visible_rows < 1) win->visible_rows = 1;
 
-    /* Update scrollbar */
-    gsize total = total_rows(win);
-    gtk_adjustment_configure(win->adj,
-        (double)win->scroll_offset,
-        0, (double)total,
-        1, (double)win->visible_rows,
-        (double)win->visible_rows);
+    /* Update scroll percentage */
+    update_scroll_percent(win);
 
     /* Get colors */
     const char *fg_str, *bg_str;
@@ -654,14 +659,7 @@ static void on_scroll(GtkEventControllerScroll *ctrl, double dx, double dy, gpoi
     if (win->scroll_offset + (gsize)win->visible_rows > total && total > (gsize)win->visible_rows)
         win->scroll_offset = total - (gsize)win->visible_rows;
 
-    gtk_adjustment_set_value(win->adj, (double)win->scroll_offset);
     hex_window_queue_redraw(win);
-}
-
-static void on_scrollbar_changed(GtkAdjustment *adj, gpointer data) {
-    HexWindow *win = data;
-    win->scroll_offset = (gsize)gtk_adjustment_get_value(adj);
-    gtk_widget_queue_draw(GTK_WIDGET(win->hex_view));
 }
 
 /* Click to position cursor */
@@ -1284,11 +1282,6 @@ HexWindow *hex_window_new(GtkApplication *app) {
     gtk_drawing_area_set_draw_func(win->hex_view, draw_hex_view, win, NULL);
     gtk_box_append(GTK_BOX(hbox), GTK_WIDGET(win->hex_view));
 
-    /* Scrollbar */
-    win->adj = gtk_adjustment_new(0, 0, 100, 1, 10, 10);
-    win->scrollbar = GTK_SCROLLBAR(gtk_scrollbar_new(GTK_ORIENTATION_VERTICAL, win->adj));
-    g_signal_connect(win->adj, "value-changed", G_CALLBACK(on_scrollbar_changed), win);
-    gtk_box_append(GTK_BOX(hbox), GTK_WIDGET(win->scrollbar));
 
     /* Keyboard input */
     GtkEventController *key_ctrl = gtk_event_controller_key_new();
@@ -1324,6 +1317,9 @@ HexWindow *hex_window_new(GtkApplication *app) {
 
     win->status_size = GTK_LABEL(gtk_label_new("Size: 0 bytes"));
     gtk_box_append(GTK_BOX(status), GTK_WIDGET(win->status_size));
+
+    win->status_scroll = GTK_LABEL(gtk_label_new("0%"));
+    gtk_box_append(GTK_BOX(status), GTK_WIDGET(win->status_scroll));
 
     gtk_box_append(GTK_BOX(vbox), status);
 

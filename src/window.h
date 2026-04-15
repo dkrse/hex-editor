@@ -7,11 +7,10 @@
 typedef struct {
     GtkApplicationWindow *window;
     GtkDrawingArea       *hex_view;
-    GtkScrollbar         *scrollbar;
-    GtkAdjustment        *adj;
     GtkLabel             *status_offset;
     GtkLabel             *status_value;
     GtkLabel             *status_size;
+    GtkLabel             *status_scroll;
     HexSettings           settings;
     GtkCssProvider       *css_provider;
     char                  current_file[2048];
