@@ -50,7 +50,7 @@
 - Modified bytes highlighted in red
 - Selection with Shift+arrow keys
 - Mouse click to position cursor
-- Mouse wheel scrolling with virtual scrollbar
+- Mouse wheel scrolling with scroll percentage in status bar
 - Save confirmation dialog on close with unsaved changes
 - Zoom in/out (Ctrl+Plus/Minus)
 - 13 color themes: System, Light, Dark, Solarized Light/Dark, Monokai, Gruvbox Light/Dark, Nord, Dracula, Tokyo Night, Catppuccin Latte/Mocha
@@ -58,7 +58,7 @@
 - Persistent settings in `~/.config/hex-editor/settings.conf`
 - Remembers last opened file and window size
 - Desktop integration (.desktop file, SVG/PNG icon)
-- Status bar: current offset, byte value (hex + binary + decimal + ASCII), file size
+- Status bar: current offset, byte value (hex + binary + decimal + ASCII), file size, scroll percentage
 
 #### Keyboard Shortcuts
 | Shortcut | Action |

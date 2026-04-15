@@ -46,7 +46,7 @@ Core of the application:
 - **Search** — Hex pattern or ASCII text search with bounds-checked parsing
 - **Go to offset** — Dialog with errno-safe strtoull parsing
 - **Close protection** — Save/Discard/Cancel dialog via `close-request` signal
-- **Scrollbar** — Virtual scrolling with `GtkAdjustment`, mouse wheel
+- **Scroll percentage** — Virtual scrolling with mouse wheel, scroll position shown as percentage in status bar
 - **SSH operations** — Connect/disconnect, remote file open via `ssh cat`, remote save via `ssh tee`, SSH status button in header bar
 
 ### actions.c (1044 lines)
@@ -77,7 +77,7 @@ Central application state:
 - `original_data` / `original_len` — Original content for dirty detection (NULL-safe)
 - `cursor_pos` / `cursor_nibble` — Cursor position (byte + nibble/bit within byte)
 - `editing_ascii` — Whether cursor is in ASCII or hex/bin pane
-- `scroll_offset` / `visible_rows` — Virtual scroll state
+- `scroll_offset` / `visible_rows` — Virtual scroll state (percentage shown in status bar)
 - `selection_start` / `selection_end` — Byte selection range
 - `ssh_*` — SSH connection state (host, user, port, key, ControlMaster paths)
 - `css_provider` — Managed CSS provider (properly unreffed on destroy)
@@ -96,7 +96,7 @@ Persisted configuration:
 
 1. `draw_hex_view()` called by GTK on each frame
 2. Font metrics measured once (cached until settings change)
-3. Scrollbar adjustment updated based on total rows
+3. Scroll percentage updated in status bar
 4. For each visible row:
    - Offset column (hex address)
    - Data bytes in hex (`XX`) or binary (`XXXXXXXX`) format

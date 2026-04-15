@@ -15,6 +15,7 @@ A lightweight native hex editor built with GTK4 and libadwaita.
 - **Modified bytes** highlighted in red
 - **Auto-growing buffer** — create new files from scratch, buffer expands as you type
 - **Save protection** — prompts Save/Discard/Cancel before closing with unsaved changes
+- **Scroll percentage** — current scroll position shown in status bar
 - **Persistent settings** — font, theme, layout preferences, SSH connections remembered
 
 ## Build
