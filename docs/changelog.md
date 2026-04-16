@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.0 — 2026-04-16
+
+### New Features
+- **Command line arguments** — `hex-editor file.bin` opens a file directly
+- **Drag & drop** — drop files onto the window to open them
+- **Recent files** — menu with last 10 opened files, persisted in settings
+- **Export selection** — dialog with 4 formats: C array, Python bytes, Base64, hex dump; dropdown to switch, copy to clipboard
+- **Data Inspector toggle** — show/hide in Settings dialog, persisted
+
+### Bug Fixes
+- Fixed out-of-bounds read in MP4 magic byte detection (`avail >= 6` → `avail >= 8`)
+- Added crash handler with backtrace for debugging
+
 ## v1.2.0 — 2026-04-16
 
 ### Editing Features

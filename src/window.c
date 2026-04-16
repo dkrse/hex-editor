@@ -326,7 +326,7 @@ static void update_inspector(HexWindow *win) {
         else if (d[0]=='G' && d[1]=='I' && d[2]=='F') magic = "GIF image";
         else if (d[0]=='B' && d[1]=='M') magic = "BMP image";
         else if (d[0]==0x52 && d[1]==0x49 && d[2]==0x46 && d[3]==0x46) magic = "RIFF (WAV/AVI)";
-        else if (avail >= 6 && d[4]=='f' && d[5]=='t' && d[6]=='y' && d[7]=='p') magic = "MP4/MOV video";
+        else if (avail >= 8 && d[4]=='f' && d[5]=='t' && d[6]=='y' && d[7]=='p') magic = "MP4/MOV video";
         else if (d[0]==0x4D && d[1]==0x5A) magic = "PE executable";
         else if (d[0]==0xCE && d[1]==0xFA && d[2]==0xED && d[3]==0xFE) magic = "Mach-O binary";
         else if (d[0]==0xCA && d[1]==0xFE && d[2]==0xBA && d[3]==0xBE) magic = "Java class / Mach-O fat";
@@ -922,6 +922,22 @@ static void on_scroll(GtkEventControllerScroll *ctrl, double dx, double dy, gpoi
 }
 
 /* Click to position cursor */
+static gboolean on_drop(GtkDropTarget *target, const GValue *value,
+                         double x, double y, gpointer data) {
+    (void)target; (void)x; (void)y;
+    HexWindow *win = data;
+    if (!G_VALUE_HOLDS(value, GDK_TYPE_FILE_LIST)) return FALSE;
+    GSList *files = g_value_get_boxed(value);
+    if (!files) return FALSE;
+    GFile *file = files->data;
+    char *path = g_file_get_path(file);
+    if (path) {
+        hex_window_load_file(win, path);
+        g_free(path);
+    }
+    return TRUE;
+}
+
 static void on_entropy_clicked(GtkGestureClick *gesture, int n_press,
                                 double x, double y, gpointer data) {
     (void)gesture; (void)n_press; (void)y;
@@ -1038,6 +1054,7 @@ void hex_window_load_file(HexWindow *win, const char *path) {
     g_strlcpy(path_copy, path, sizeof(path_copy));
     snprintf(win->current_file, sizeof(win->current_file), "%s", path_copy);
     snprintf(win->settings.last_file, sizeof(win->settings.last_file), "%s", path_copy);
+    hex_settings_add_recent(&win->settings, path_copy);
     hex_settings_save(&win->settings);
 
     update_title(win);
@@ -1468,6 +1485,9 @@ void hex_window_apply_settings(HexWindow *win) {
     apply_theme(win);
     apply_css(win);
     win->char_width = 0; /* force re-measure */
+    if (win->inspector_panel)
+        gtk_widget_set_visible(win->inspector_panel,
+            win->settings.show_inspector && win->settings.display_mode == 0);
     hex_window_queue_redraw(win);
 }
 
@@ -1575,6 +1595,21 @@ HexWindow *hex_window_new(GtkApplication *app) {
     g_menu_append(menu, "Save", "win.save");
     g_menu_append(menu, "Save As...", "win.save-as");
 
+    /* Recent files submenu */
+    if (win->settings.recent_count > 0) {
+        GMenu *recent_menu = g_menu_new();
+        for (int i = 0; i < win->settings.recent_count && i < 10; i++) {
+            if (!win->settings.recent_files[i][0]) continue;
+            char *base = g_path_get_basename(win->settings.recent_files[i]);
+            char action[32];
+            snprintf(action, sizeof(action), "win.recent-%d", i);
+            g_menu_append(recent_menu, base, action);
+            g_free(base);
+        }
+        g_menu_append_submenu(menu, "Recent Files", G_MENU_MODEL(recent_menu));
+        g_object_unref(recent_menu);
+    }
+
     GMenu *edit_section = g_menu_new();
     g_menu_append(edit_section, "Undo", "win.undo");
     g_menu_append(edit_section, "Redo", "win.redo");
@@ -1583,6 +1618,7 @@ HexWindow *hex_window_new(GtkApplication *app) {
     g_menu_append(edit_section, "Go to Offset...", "win.goto-offset");
     g_menu_append(edit_section, "Find...", "win.find");
     g_menu_append(edit_section, "Find & Replace...", "win.find-replace");
+    g_menu_append(edit_section, "Export Selection...", "win.export-selection");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(edit_section));
     g_object_unref(edit_section);
 
@@ -1733,10 +1769,15 @@ HexWindow *hex_window_new(GtkApplication *app) {
     gtk_box_append(GTK_BOX(win->inspector_panel), GTK_WIDGET(win->inspector_label));
 
     gtk_box_append(GTK_BOX(hbox), win->inspector_panel);
-    /* Hide inspector in binary mode */
-    if (win->settings.display_mode == 1)
+    /* Hide inspector in binary mode or if disabled in settings */
+    if (win->settings.display_mode == 1 || !win->settings.show_inspector)
         gtk_widget_set_visible(win->inspector_panel, FALSE);
 
+
+    /* Drag & drop */
+    GtkDropTarget *drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+    g_signal_connect(drop, "drop", G_CALLBACK(on_drop), win);
+    gtk_widget_add_controller(GTK_WIDGET(win->window), GTK_EVENT_CONTROLLER(drop));
 
     /* Keyboard input */
     GtkEventController *key_ctrl = gtk_event_controller_key_new();

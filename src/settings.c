@@ -31,9 +31,12 @@ void hex_settings_load(HexSettings *s) {
     s->show_ascii = TRUE;
     s->uppercase_hex = TRUE;
     s->display_mode = 0;
+    s->show_inspector = TRUE;
     s->window_width = 820;
     s->window_height = 600;
     s->last_file[0] = '\0';
+    s->recent_count = 0;
+    for (int i = 0; i < 10; i++) s->recent_files[i][0] = '\0';
 
     char *path = hex_settings_get_config_path();
     g_message("settings_load: reading from '%s'", path);
@@ -69,6 +72,8 @@ void hex_settings_load(HexSettings *s) {
             s->show_ascii = (strcmp(val, "1") == 0);
         else if (strcmp(key, "uppercase_hex") == 0)
             s->uppercase_hex = (strcmp(val, "1") == 0);
+        else if (strcmp(key, "show_inspector") == 0)
+            s->show_inspector = (strcmp(val, "1") == 0);
         else if (strcmp(key, "display_mode") == 0) {
             int v = atoi(val); if (v == 0 || v == 1) s->display_mode = v;
         } else if (strcmp(key, "window_width") == 0) {
@@ -77,6 +82,13 @@ void hex_settings_load(HexSettings *s) {
             int v = atoi(val); if (v >= 200 && v <= 8192) s->window_height = v;
         } else if (strcmp(key, "last_file") == 0)
             SAFE_COPY(s->last_file, val);
+        else if (strncmp(key, "recent_", 7) == 0) {
+            int idx = atoi(key + 7);
+            if (idx >= 0 && idx < 10 && val[0]) {
+                SAFE_COPY(s->recent_files[idx], val);
+                if (idx >= s->recent_count) s->recent_count = idx + 1;
+            }
+        }
 
         #undef SAFE_COPY
     }
@@ -105,10 +117,14 @@ void hex_settings_save(const HexSettings *s) {
     fprintf(f, "bytes_per_row=%d\n", s->bytes_per_row);
     fprintf(f, "show_ascii=%d\n", s->show_ascii);
     fprintf(f, "uppercase_hex=%d\n", s->uppercase_hex);
+    fprintf(f, "show_inspector=%d\n", s->show_inspector);
     fprintf(f, "display_mode=%d\n", s->display_mode);
     fprintf(f, "window_width=%d\n", s->window_width);
     fprintf(f, "window_height=%d\n", s->window_height);
     fprintf(f, "last_file=%s\n", s->last_file);
+    for (int i = 0; i < s->recent_count && i < 10; i++)
+        if (s->recent_files[i][0])
+            fprintf(f, "recent_%d=%s\n", i, s->recent_files[i]);
 
     gboolean ok = (fflush(f) == 0);
     fclose(f);
@@ -116,6 +132,30 @@ void hex_settings_save(const HexSettings *s) {
         g_rename(tmp, path);
     else
         g_remove(tmp);
+}
+
+void hex_settings_add_recent(HexSettings *s, const char *path) {
+    if (!path || !path[0]) return;
+
+    /* Remove if already in list */
+    for (int i = 0; i < s->recent_count; i++) {
+        if (strcmp(s->recent_files[i], path) == 0) {
+            /* Shift up */
+            for (int j = i; j > 0; j--)
+                strncpy(s->recent_files[j], s->recent_files[j - 1], 2047);
+            strncpy(s->recent_files[0], path, 2047);
+            s->recent_files[0][2047] = '\0';
+            return;
+        }
+    }
+
+    /* Shift everything down, insert at front */
+    int max = s->recent_count < 9 ? s->recent_count : 9;
+    for (int i = max; i > 0; i--)
+        strncpy(s->recent_files[i], s->recent_files[i - 1], 2047);
+    strncpy(s->recent_files[0], path, 2047);
+    s->recent_files[0][2047] = '\0';
+    if (s->recent_count < 10) s->recent_count++;
 }
 
 /* ── SFTP Connections ── */

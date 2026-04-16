@@ -213,7 +213,8 @@ static void on_toggle_binary(GSimpleAction *action, GVariant *param, gpointer da
     win->cursor_nibble = 0;
     /* Hide inspector in binary mode — too wide */
     if (win->inspector_panel)
-        gtk_widget_set_visible(win->inspector_panel, win->settings.display_mode == 0);
+        gtk_widget_set_visible(win->inspector_panel,
+            win->settings.display_mode == 0 && win->settings.show_inspector);
     hex_window_apply_settings(win);
     hex_settings_save(&win->settings);
 }
@@ -303,6 +304,11 @@ static void on_show_ascii_toggled(GtkCheckButton *btn, gpointer data) {
     win->settings.show_ascii = gtk_check_button_get_active(btn);
 }
 
+static void on_inspector_toggled(GtkCheckButton *btn, gpointer data) {
+    HexWindow *win = data;
+    win->settings.show_inspector = gtk_check_button_get_active(btn);
+}
+
 static void on_uppercase_toggled(GtkCheckButton *btn, gpointer data) {
     HexWindow *win = data;
     win->settings.uppercase_hex = gtk_check_button_get_active(btn);
@@ -388,6 +394,13 @@ static void on_settings(GSimpleAction *action, GVariant *param, gpointer data) {
     gtk_check_button_set_active(GTK_CHECK_BUTTON(upper_check), win->settings.uppercase_hex);
     g_signal_connect(upper_check, "toggled", G_CALLBACK(on_uppercase_toggled), win);
     gtk_grid_attach(GTK_GRID(grid), upper_check, 1, row++, 1, 1);
+
+    /* Data Inspector */
+    gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Data Inspector:"), 0, row, 1, 1);
+    GtkWidget *inspector_check = gtk_check_button_new();
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(inspector_check), win->settings.show_inspector);
+    g_signal_connect(inspector_check, "toggled", G_CALLBACK(on_inspector_toggled), win);
+    gtk_grid_attach(GTK_GRID(grid), inspector_check, 1, row++, 1, 1);
 
     /* Buttons */
     GtkWidget *btn_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -1053,6 +1066,156 @@ static void on_checksums(GSimpleAction *action, GVariant *param, gpointer data) 
     analysis_show_checksums(data);
 }
 
+/* ── Recent files ── */
+
+static void on_recent(GSimpleAction *action, GVariant *param, gpointer data) {
+    (void)param;
+    HexWindow *win = data;
+    const char *name = g_action_get_name(G_ACTION(action));
+    /* name is "recent-N" */
+    const char *dash = strrchr(name, '-');
+    if (!dash) return;
+    int idx = atoi(dash + 1);
+    if (idx >= 0 && idx < win->settings.recent_count && win->settings.recent_files[idx][0])
+        hex_window_load_file(win, win->settings.recent_files[idx]);
+}
+
+/* ── Export selection ── */
+
+static void on_export_format_changed(GtkDropDown *dropdown, GParamSpec *pspec, gpointer data);
+static void on_export_copy(GtkButton *btn, gpointer data);
+
+static void on_export_selection(GSimpleAction *action, GVariant *param, gpointer data) {
+    (void)action; (void)param;
+    HexWindow *win = data;
+    if (!win->data || win->data_len == 0) return;
+
+    gsize lo = MIN(win->selection_start, win->selection_end);
+    gsize hi = MAX(win->selection_start, win->selection_end);
+    if (lo == hi) { lo = 0; hi = win->data_len - 1; } /* whole file if no selection */
+    if (hi >= win->data_len) hi = win->data_len - 1;
+    gsize count = hi - lo + 1;
+
+    GtkWidget *dialog = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(dialog), "Export");
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(win->window));
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 600, 400);
+    gtk_window_set_titlebar(GTK_WINDOW(dialog), adw_header_bar_new());
+
+    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_start(vbox, 12);
+    gtk_widget_set_margin_end(vbox, 12);
+    gtk_widget_set_margin_top(vbox, 8);
+    gtk_widget_set_margin_bottom(vbox, 12);
+
+    char info[128];
+    snprintf(info, sizeof(info), "Bytes 0x%lX — 0x%lX (%lu bytes)",
+             (unsigned long)lo, (unsigned long)hi, (unsigned long)count);
+    GtkWidget *info_label = gtk_label_new(info);
+    gtk_label_set_xalign(GTK_LABEL(info_label), 0);
+    gtk_box_append(GTK_BOX(vbox), info_label);
+
+    /* Build all formats */
+    GString *c_arr = g_string_new("unsigned char data[] = {\n    ");
+    for (gsize i = 0; i < count; i++) {
+        g_string_append_printf(c_arr, "0x%02X", win->data[lo + i]);
+        if (i + 1 < count) g_string_append(c_arr, ", ");
+        if ((i + 1) % 12 == 0 && i + 1 < count) g_string_append(c_arr, "\n    ");
+    }
+    g_string_append(c_arr, "\n};\n");
+
+    GString *py_bytes = g_string_new("data = b\"");
+    for (gsize i = 0; i < count; i++)
+        g_string_append_printf(py_bytes, "\\x%02x", win->data[lo + i]);
+    g_string_append(py_bytes, "\"\n");
+
+    gchar *base64 = g_base64_encode(win->data + lo, count);
+
+    GString *hexdump = g_string_new(NULL);
+    int bpr = 16;
+    for (gsize i = 0; i < count; i += (gsize)bpr) {
+        g_string_append_printf(hexdump, "%08lX  ", (unsigned long)(lo + i));
+        for (int j = 0; j < bpr; j++) {
+            if (i + (gsize)j < count)
+                g_string_append_printf(hexdump, "%02X ", win->data[lo + i + (gsize)j]);
+            else
+                g_string_append(hexdump, "   ");
+            if (j == 7) g_string_append_c(hexdump, ' ');
+        }
+        g_string_append(hexdump, " |");
+        for (int j = 0; j < bpr && i + (gsize)j < count; j++) {
+            unsigned char b = win->data[lo + i + (gsize)j];
+            g_string_append_c(hexdump, (b >= 32 && b < 127) ? (char)b : '.');
+        }
+        g_string_append(hexdump, "|\n");
+    }
+
+    /* Notebook-style with dropdown */
+    const char *formats[] = {"C Array", "Python bytes", "Base64", "Hex Dump", NULL};
+    const char *contents[] = {c_arr->str, py_bytes->str, base64, hexdump->str};
+
+    GtkWidget *dropdown = gtk_drop_down_new_from_strings(formats);
+    gtk_box_append(GTK_BOX(vbox), dropdown);
+
+    GtkWidget *scroll = gtk_scrolled_window_new();
+    gtk_widget_set_vexpand(scroll, TRUE);
+    GtkWidget *text_view = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(text_view), FALSE);
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(text_view), TRUE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(text_view), GTK_WRAP_CHAR);
+    GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(text_view));
+    gtk_text_buffer_set_text(buffer, contents[0], -1);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), text_view);
+    gtk_box_append(GTK_BOX(vbox), scroll);
+
+    /* Store contents for dropdown switching */
+    g_object_set_data_full(G_OBJECT(dropdown), "c-arr", g_strdup(contents[0]), g_free);
+    g_object_set_data_full(G_OBJECT(dropdown), "py-bytes", g_strdup(contents[1]), g_free);
+    g_object_set_data_full(G_OBJECT(dropdown), "base64", g_strdup(contents[2]), g_free);
+    g_object_set_data_full(G_OBJECT(dropdown), "hexdump", g_strdup(contents[3]), g_free);
+    g_object_set_data(G_OBJECT(dropdown), "buffer", buffer);
+
+    g_signal_connect(dropdown, "notify::selected", G_CALLBACK(on_export_format_changed), NULL);
+
+    /* Copy button */
+    GtkWidget *copy_btn = gtk_button_new_with_label("Copy to Clipboard");
+    gtk_widget_set_halign(copy_btn, GTK_ALIGN_END);
+    g_object_set_data(G_OBJECT(copy_btn), "buffer", buffer);
+    g_signal_connect(copy_btn, "clicked", G_CALLBACK(on_export_copy), NULL);
+    gtk_box_append(GTK_BOX(vbox), copy_btn);
+
+    gtk_window_set_child(GTK_WINDOW(dialog), vbox);
+    gtk_window_present(GTK_WINDOW(dialog));
+
+    g_string_free(c_arr, TRUE);
+    g_string_free(py_bytes, TRUE);
+    g_free(base64);
+    g_string_free(hexdump, TRUE);
+}
+
+static void on_export_format_changed(GtkDropDown *dropdown, GParamSpec *pspec, gpointer data) {
+    (void)pspec; (void)data;
+    guint idx = gtk_drop_down_get_selected(dropdown);
+    const char *keys[] = {"c-arr", "py-bytes", "base64", "hexdump"};
+    if (idx >= 4) return;
+    const char *text = g_object_get_data(G_OBJECT(dropdown), keys[idx]);
+    GtkTextBuffer *buf = g_object_get_data(G_OBJECT(dropdown), "buffer");
+    if (text && buf)
+        gtk_text_buffer_set_text(buf, text, -1);
+}
+
+static void on_export_copy(GtkButton *btn, gpointer data) {
+    (void)data;
+    GtkTextBuffer *buf = g_object_get_data(G_OBJECT(btn), "buffer");
+    if (!buf) return;
+    GtkTextIter start, end;
+    gtk_text_buffer_get_bounds(buf, &start, &end);
+    char *text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+    GdkClipboard *cb = gdk_display_get_clipboard(gdk_display_get_default());
+    gdk_clipboard_set_text(cb, text);
+    g_free(text);
+}
+
 /* ── Register all actions ── */
 
 void hex_actions_setup(HexWindow *win, GtkApplication *app) {
@@ -1079,10 +1242,21 @@ void hex_actions_setup(HexWindow *win, GtkApplication *app) {
         {"byte-frequency",  on_byte_frequency,  NULL, NULL, NULL, {0}},
         {"extract-strings", on_extract_strings, NULL, NULL, NULL, {0}},
         {"checksums",       on_checksums,       NULL, NULL, NULL, {0}},
+        {"export-selection",on_export_selection,NULL, NULL, NULL, {0}},
     };
 
     g_action_map_add_action_entries(G_ACTION_MAP(win->window), win_entries,
                                    G_N_ELEMENTS(win_entries), win);
+
+    /* Recent file actions */
+    for (int i = 0; i < win->settings.recent_count && i < 10; i++) {
+        char name[16];
+        snprintf(name, sizeof(name), "recent-%d", i);
+        GSimpleAction *a = g_simple_action_new(name, NULL);
+        g_signal_connect(a, "activate", G_CALLBACK(on_recent), win);
+        g_action_map_add_action(G_ACTION_MAP(win->window), G_ACTION(a));
+        g_object_unref(a);
+    }
 
     /* Keyboard shortcuts */
     const char *accels_open[]   = {"<Ctrl>o", NULL};

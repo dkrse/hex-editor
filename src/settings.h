@@ -13,13 +13,17 @@ typedef struct {
     gboolean show_ascii;
     gboolean uppercase_hex;
     int  display_mode;        /* 0=hex, 1=binary */
+    gboolean show_inspector;
     int  window_width;
     int  window_height;
     char last_file[2048];
+    char recent_files[10][2048];
+    int  recent_count;
 } HexSettings;
 
 void     hex_settings_load(HexSettings *s);
 void     hex_settings_save(const HexSettings *s);
+void     hex_settings_add_recent(HexSettings *s, const char *path);
 char    *hex_settings_get_config_path(void);
 
 /* SFTP/SSH connections */

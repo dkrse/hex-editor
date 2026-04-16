@@ -10,14 +10,18 @@ A lightweight native hex editor built with GTK4 and libadwaita.
 - **Undo/Redo** — full undo history (Ctrl+Z / Ctrl+Shift+Z)
 - **Copy/Paste** — copy selection as hex, paste hex or ASCII (Ctrl+C / Ctrl+V)
 - **Find & Replace** — search and replace hex patterns or ASCII text (Ctrl+H)
+- **Export selection** — C array, Python bytes, Base64, hex dump
 - **Cross-highlight** — cursor position shown in both hex/bin and ASCII panes with distinct colors (blue=hex, green=ASCII)
-- **Data Inspector** — right panel showing value at cursor as int8/16/32/64, float, double (LE/BE), with magic byte detection
+- **Data Inspector** — right panel showing value at cursor as int8/16/32/64, float, double (LE/BE), with magic byte detection (toggleable in Settings)
 - **Entropy visualization** — color bar showing file entropy per block (blue=low, red=high), click to navigate
 - **Byte frequency histogram** — bar chart of all 256 byte values with top-10 list
 - **Strings extraction** — find all ASCII strings with offsets, click to navigate
 - **Checksums** — CRC32, MD5, SHA1, SHA256 of file or selection
 - **Search** — find hex patterns (`FF D8 FF`) or ASCII text
 - **Go to offset** — jump to any position (hex or decimal)
+- **Recent files** — quick access to last 10 opened files
+- **Drag & drop** — drop a file onto the window to open it
+- **Command line** — `hex-editor file.bin` opens a file directly
 - **SSH/SFTP** — connect to remote servers, browse and edit remote binary files
 - **13 themes** — System, Light, Dark, Solarized, Monokai, Gruvbox, Nord, Dracula, Tokyo Night, Catppuccin
 - **Modified bytes** highlighted in red, modified rows highlighted in offset column
@@ -38,7 +42,7 @@ make
 ## Run
 
 ```bash
-./build/hex-editor
+./build/hex-editor [file.bin]
 ```
 
 ## Install Desktop Shortcut
