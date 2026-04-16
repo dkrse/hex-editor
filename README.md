@@ -7,12 +7,20 @@ A lightweight native hex editor built with GTK4 and libadwaita.
 
 - **Hex and Binary view** — switch with Ctrl+B
 - **Edit** hex bytes, binary bits, or ASCII text directly
+- **Undo/Redo** — full undo history (Ctrl+Z / Ctrl+Shift+Z)
+- **Copy/Paste** — copy selection as hex, paste hex or ASCII (Ctrl+C / Ctrl+V)
+- **Find & Replace** — search and replace hex patterns or ASCII text (Ctrl+H)
 - **Cross-highlight** — cursor position shown in both hex/bin and ASCII panes with distinct colors (blue=hex, green=ASCII)
+- **Data Inspector** — right panel showing value at cursor as int8/16/32/64, float, double (LE/BE), with magic byte detection
+- **Entropy visualization** — color bar showing file entropy per block (blue=low, red=high), click to navigate
+- **Byte frequency histogram** — bar chart of all 256 byte values with top-10 list
+- **Strings extraction** — find all ASCII strings with offsets, click to navigate
+- **Checksums** — CRC32, MD5, SHA1, SHA256 of file or selection
 - **Search** — find hex patterns (`FF D8 FF`) or ASCII text
 - **Go to offset** — jump to any position (hex or decimal)
 - **SSH/SFTP** — connect to remote servers, browse and edit remote binary files
 - **13 themes** — System, Light, Dark, Solarized, Monokai, Gruvbox, Nord, Dracula, Tokyo Night, Catppuccin
-- **Modified bytes** highlighted in red
+- **Modified bytes** highlighted in red, modified rows highlighted in offset column
 - **Auto-growing buffer** — create new files from scratch, buffer expands as you type
 - **Save protection** — prompts Save/Discard/Cancel before closing with unsaved changes
 - **Scroll percentage** — current scroll position shown in status bar
@@ -52,7 +60,12 @@ update-desktop-database ~/.local/share/applications/
 | Ctrl+O | Open file |
 | Ctrl+S | Save |
 | Ctrl+Shift+S | Save as |
+| Ctrl+Z | Undo |
+| Ctrl+Shift+Z | Redo |
+| Ctrl+C | Copy (hex) |
+| Ctrl+V | Paste (hex or ASCII) |
 | Ctrl+F | Find (hex or text) |
+| Ctrl+H | Find & Replace |
 | Ctrl+G | Go to offset |
 | Ctrl+B | Toggle hex/binary |
 | Ctrl+Plus/Minus | Zoom in/out |

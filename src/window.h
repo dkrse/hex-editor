@@ -5,12 +5,24 @@
 #include "settings.h"
 
 typedef struct {
+    gsize         offset;
+    unsigned char old_val;
+    unsigned char new_val;
+    gboolean      was_insert; /* TRUE if this byte was appended (grew data_len) */
+} HexUndoEntry;
+
+typedef struct {
     GtkApplicationWindow *window;
     GtkDrawingArea       *hex_view;
     GtkLabel             *status_offset;
     GtkLabel             *status_value;
     GtkLabel             *status_size;
     GtkLabel             *status_scroll;
+    GtkLabel             *inspector_label;
+    GtkWidget            *inspector_panel;
+    GtkDrawingArea       *entropy_bar;
+    double               *entropy_data;
+    int                   entropy_blocks;
     HexSettings           settings;
     GtkCssProvider       *css_provider;
     char                  current_file[2048];
@@ -22,6 +34,12 @@ typedef struct {
     unsigned char        *original_data;
     gsize                 original_len;
     gboolean              dirty;
+
+    /* Undo/Redo */
+    HexUndoEntry         *undo_stack;
+    int                   undo_count;
+    int                   undo_alloc;
+    int                   undo_pos;
 
     /* Cursor / selection */
     gsize                 cursor_pos;     /* byte offset */
@@ -37,9 +55,11 @@ typedef struct {
     int                   row_height;
     int                   char_width;
 
-    /* Search */
+    /* Search & Replace */
     GtkWidget            *search_bar;
     GtkWidget            *search_entry;
+    GtkWidget            *replace_entry;
+    GtkWidget            *replace_box;
     GtkLabel             *match_label;
     gsize                *match_offsets;
     int                   match_count;
@@ -64,7 +84,13 @@ HexWindow *hex_window_new(GtkApplication *app);
 void       hex_window_apply_settings(HexWindow *win);
 void       hex_window_load_file(HexWindow *win, const char *path);
 void       hex_window_show_search(HexWindow *win);
+void       hex_window_show_find_replace(HexWindow *win);
 void       hex_window_goto_offset(HexWindow *win);
+void       hex_window_undo(HexWindow *win);
+void       hex_window_redo(HexWindow *win);
+void       hex_window_copy(HexWindow *win);
+void       hex_window_paste(HexWindow *win);
+unsigned char *hex_parse_hex_string(const char *text, gsize *out_len);
 void       hex_window_queue_redraw(HexWindow *win);
 void       hex_window_ssh_connect(HexWindow *win, const char *host,
                                    const char *user, int port,

@@ -5,7 +5,6 @@ static HexWindow *g_win = NULL;
 
 static void on_activate(GtkApplication *app, gpointer user_data) {
     (void)user_data;
-    fprintf(stderr, "on_activate called, g_win=%p\n", (void*)g_win);
     if (g_win) {
         gtk_window_present(GTK_WINDOW(g_win->window));
         return;

@@ -3,12 +3,17 @@
 #include "window.h"
 #include "actions.h"
 #include "ssh.h"
+#include "analysis.h"
 #include <glib/gstdio.h>
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
 #include <sys/stat.h>
+
+/* Forward declarations */
+static void parse_hex_string(const char *str, unsigned char **out, int *out_len);
+static void update_inspector(HexWindow *win);
 
 /* ── Theme definitions (same as note-light) ── */
 
@@ -239,6 +244,105 @@ static void update_status(HexWindow *win) {
         snprintf(buf, sizeof(buf), "Size: 0 bytes");
     }
     gtk_label_set_text(win->status_size, buf);
+
+    update_inspector(win);
+}
+
+/* ── Data Inspector ── */
+
+static void update_inspector(HexWindow *win) {
+    if (!win->inspector_label) return;
+    if (!win->data || win->cursor_pos >= win->data_len) {
+        gtk_label_set_text(win->inspector_label, "No data");
+        return;
+    }
+
+    gsize pos = win->cursor_pos;
+    gsize avail = win->data_len - pos;
+    unsigned char *d = win->data + pos;
+
+    GString *s = g_string_new(NULL);
+
+    /* Int8 */
+    g_string_append_printf(s, "int8:    %d / %u\n", (int8_t)d[0], d[0]);
+
+    /* Int16 LE/BE */
+    if (avail >= 2) {
+        int16_t i16le = (int16_t)(d[0] | (d[1] << 8));
+        int16_t i16be = (int16_t)((d[0] << 8) | d[1]);
+        g_string_append_printf(s, "int16 LE: %d\n", i16le);
+        g_string_append_printf(s, "int16 BE: %d\n", i16be);
+    }
+
+    /* Int32 LE/BE */
+    if (avail >= 4) {
+        int32_t i32le = (int32_t)((uint32_t)d[0] | ((uint32_t)d[1] << 8) |
+                         ((uint32_t)d[2] << 16) | ((uint32_t)d[3] << 24));
+        int32_t i32be = (int32_t)(((uint32_t)d[0] << 24) | ((uint32_t)d[1] << 16) |
+                         ((uint32_t)d[2] << 8) | (uint32_t)d[3]);
+        g_string_append_printf(s, "int32 LE: %d\n", i32le);
+        g_string_append_printf(s, "int32 BE: %d\n", i32be);
+    }
+
+    /* Int64 LE/BE */
+    if (avail >= 8) {
+        uint64_t u64le = 0, u64be = 0;
+        for (int i = 0; i < 8; i++) {
+            u64le |= (uint64_t)d[i] << (i * 8);
+            u64be |= (uint64_t)d[i] << ((7 - i) * 8);
+        }
+        g_string_append_printf(s, "int64 LE: %ld\n", (int64_t)u64le);
+        g_string_append_printf(s, "int64 BE: %ld\n", (int64_t)u64be);
+    }
+
+    /* Float LE */
+    if (avail >= 4) {
+        float f;
+        uint32_t u32le = (uint32_t)d[0] | ((uint32_t)d[1] << 8) |
+                          ((uint32_t)d[2] << 16) | ((uint32_t)d[3] << 24);
+        memcpy(&f, &u32le, sizeof(f));
+        g_string_append_printf(s, "float LE: %g\n", (double)f);
+    }
+
+    /* Double LE */
+    if (avail >= 8) {
+        double dbl;
+        uint64_t u64le = 0;
+        for (int i = 0; i < 8; i++)
+            u64le |= (uint64_t)d[i] << (i * 8);
+        memcpy(&dbl, &u64le, sizeof(dbl));
+        g_string_append_printf(s, "double LE: %g\n", dbl);
+    }
+
+    /* Magic bytes detection */
+    const char *magic = NULL;
+    if (pos == 0 && avail >= 4) {
+        if (d[0]==0x89 && d[1]=='P' && d[2]=='N' && d[3]=='G') magic = "PNG image";
+        else if (d[0]==0xFF && d[1]==0xD8 && d[2]==0xFF) magic = "JPEG image";
+        else if (d[0]=='%' && d[1]=='P' && d[2]=='D' && d[3]=='F') magic = "PDF document";
+        else if (d[0]==0x7F && d[1]=='E' && d[2]=='L' && d[3]=='F') magic = "ELF binary";
+        else if (d[0]=='P' && d[1]=='K' && d[2]==3 && d[3]==4) magic = "ZIP/JAR archive";
+        else if (d[0]==0x1F && d[1]==0x8B) magic = "GZIP compressed";
+        else if (d[0]=='G' && d[1]=='I' && d[2]=='F') magic = "GIF image";
+        else if (d[0]=='B' && d[1]=='M') magic = "BMP image";
+        else if (d[0]==0x52 && d[1]==0x49 && d[2]==0x46 && d[3]==0x46) magic = "RIFF (WAV/AVI)";
+        else if (avail >= 6 && d[4]=='f' && d[5]=='t' && d[6]=='y' && d[7]=='p') magic = "MP4/MOV video";
+        else if (d[0]==0x4D && d[1]==0x5A) magic = "PE executable";
+        else if (d[0]==0xCE && d[1]==0xFA && d[2]==0xED && d[3]==0xFE) magic = "Mach-O binary";
+        else if (d[0]==0xCA && d[1]==0xFE && d[2]==0xBA && d[3]==0xBE) magic = "Java class / Mach-O fat";
+        else if (avail >= 5 && d[0]=='<' && d[1]=='?' && d[2]=='x' && d[3]=='m' && d[4]=='l') magic = "XML document";
+    }
+    /* Detect magic at current position too */
+    if (!magic && avail >= 4) {
+        if (d[0]==0x89 && d[1]=='P' && d[2]=='N' && d[3]=='G') magic = "PNG signature";
+        else if (d[0]==0xFF && d[1]==0xD8 && d[2]==0xFF) magic = "JPEG marker";
+        else if (d[0]==0x00 && d[1]==0x00 && d[2]==0x01 && d[3]==0x00) magic = "ICO icon";
+    }
+    if (magic)
+        g_string_append_printf(s, "\n[%s]", magic);
+
+    gtk_label_set_text(win->inspector_label, s->str);
+    g_string_free(s, TRUE);
 }
 
 static void ensure_cursor_visible(HexWindow *win) {
@@ -337,10 +441,24 @@ static void draw_hex_view(GtkDrawingArea *area, cairo_t *cr,
 
         int y = row * win->row_height;
 
-        /* Offset column */
+        /* Offset column — append '*' if any byte in row is modified */
         char buf[32];
+        gboolean row_modified = FALSE;
+        if (win->original_data) {
+            for (int col = 0; col < bpr && row_offset + (gsize)col < win->data_len; col++) {
+                gsize pos = row_offset + (gsize)col;
+                if (pos < win->original_len && win->data[pos] != win->original_data[pos]) {
+                    row_modified = TRUE;
+                    break;
+                }
+            }
+        }
         snprintf(buf, sizeof(buf), off_fmt, (unsigned long)row_offset);
-        cairo_set_source_rgba(cr, offset_fg.red, offset_fg.green, offset_fg.blue, offset_fg.alpha);
+        if (row_modified) {
+            cairo_set_source_rgba(cr, modified_fg.red, modified_fg.green, modified_fg.blue, 0.6);
+        } else {
+            cairo_set_source_rgba(cr, offset_fg.red, offset_fg.green, offset_fg.blue, offset_fg.alpha);
+        }
         pango_layout_set_text(layout, buf, -1);
         cairo_move_to(cr, 0, y);
         pango_cairo_show_layout(cr, layout);
@@ -471,6 +589,134 @@ static void set_byte_dirty(HexWindow *win) {
     }
 }
 
+static void undo_push(HexWindow *win, gsize offset, unsigned char old_val,
+                       unsigned char new_val, gboolean was_insert) {
+    /* Discard redo future */
+    win->undo_count = win->undo_pos;
+    /* Grow stack if needed */
+    if (win->undo_count >= win->undo_alloc) {
+        win->undo_alloc = win->undo_alloc ? win->undo_alloc * 2 : 256;
+        win->undo_stack = g_realloc(win->undo_stack,
+                                     win->undo_alloc * sizeof(HexUndoEntry));
+    }
+    HexUndoEntry *e = &win->undo_stack[win->undo_count];
+    e->offset = offset;
+    e->old_val = old_val;
+    e->new_val = new_val;
+    e->was_insert = was_insert;
+    win->undo_count++;
+    win->undo_pos = win->undo_count;
+}
+
+void hex_window_undo(HexWindow *win) {
+    if (win->undo_pos <= 0) return;
+    win->undo_pos--;
+    HexUndoEntry *e = &win->undo_stack[win->undo_pos];
+    if (e->was_insert) {
+        /* Undo an append: shrink data_len */
+        if (e->offset < win->data_len)
+            win->data_len--;
+    } else {
+        if (e->offset < win->data_len)
+            win->data[e->offset] = e->old_val;
+    }
+    win->cursor_pos = e->offset;
+    win->cursor_nibble = 0;
+    set_byte_dirty(win);
+    ensure_cursor_visible(win);
+    hex_window_queue_redraw(win);
+}
+
+void hex_window_redo(HexWindow *win) {
+    if (win->undo_pos >= win->undo_count) return;
+    HexUndoEntry *e = &win->undo_stack[win->undo_pos];
+    if (e->was_insert) {
+        /* Redo an append: extend data_len */
+        if (e->offset >= win->data_len && e->offset < win->data_alloc)
+            win->data_len = e->offset + 1;
+        if (e->offset < win->data_len)
+            win->data[e->offset] = e->new_val;
+    } else {
+        if (e->offset < win->data_len)
+            win->data[e->offset] = e->new_val;
+    }
+    win->undo_pos++;
+    win->cursor_pos = e->offset;
+    win->cursor_nibble = 0;
+    set_byte_dirty(win);
+    ensure_cursor_visible(win);
+    hex_window_queue_redraw(win);
+}
+
+void hex_window_copy(HexWindow *win) {
+    if (!win->data || win->data_len == 0) return;
+    gsize lo = MIN(win->selection_start, win->selection_end);
+    gsize hi = MAX(win->selection_start, win->selection_end);
+    if (lo == hi && lo < win->data_len) hi = lo; /* single byte */
+    if (hi >= win->data_len) hi = win->data_len - 1;
+    gsize count = hi - lo + 1;
+    /* Build hex string "XX XX XX ..." */
+    char *hex = g_malloc(count * 3 + 1);
+    for (gsize i = 0; i < count; i++) {
+        snprintf(hex + i * 3, 4, "%02X%s", win->data[lo + i],
+                 (i + 1 < count) ? " " : "");
+    }
+    GdkClipboard *cb = gdk_display_get_clipboard(gdk_display_get_default());
+    gdk_clipboard_set_text(cb, hex);
+    g_free(hex);
+}
+
+static void paste_cb(GObject *source, GAsyncResult *result, gpointer data) {
+    HexWindow *win = data;
+    GdkClipboard *cb = GDK_CLIPBOARD(source);
+    char *text = gdk_clipboard_read_text_finish(cb, result, NULL);
+    if (!text || !text[0]) { g_free(text); return; }
+
+    /* Try parsing as hex first */
+    unsigned char *bytes = NULL;
+    int blen = 0;
+    parse_hex_string(text, &bytes, &blen);
+    if (!bytes || blen <= 0) { g_free(text); return; }
+
+    /* Write bytes at cursor position */
+    for (int i = 0; i < blen; i++) {
+        gsize pos = win->cursor_pos + (gsize)i;
+        /* Grow if needed */
+        if (pos >= win->data_len) {
+            if (pos >= win->data_alloc) {
+                gsize new_alloc = win->data_alloc ? win->data_alloc : 4096;
+                while (new_alloc <= pos) {
+                    if (new_alloc > SIZE_MAX / 2) break;
+                    new_alloc *= 2;
+                }
+                if (new_alloc <= pos) { g_free(bytes); g_free(text); return; }
+                win->data = g_realloc(win->data, new_alloc);
+                win->data_alloc = new_alloc;
+            }
+            /* Zero-fill gap */
+            if (pos > win->data_len)
+                memset(win->data + win->data_len, 0, pos - win->data_len);
+            win->data_len = pos + 1;
+            undo_push(win, pos, 0, bytes[i], TRUE);
+        } else {
+            undo_push(win, pos, win->data[pos], bytes[i], FALSE);
+        }
+        win->data[pos] = bytes[i];
+    }
+    win->cursor_pos += (gsize)blen;
+    if (win->cursor_pos > win->data_len) win->cursor_pos = win->data_len;
+    set_byte_dirty(win);
+    ensure_cursor_visible(win);
+    hex_window_queue_redraw(win);
+    g_free(bytes);
+    g_free(text);
+}
+
+void hex_window_paste(HexWindow *win) {
+    GdkClipboard *cb = gdk_display_get_clipboard(gdk_display_get_default());
+    gdk_clipboard_read_text_async(cb, NULL, paste_cb, win);
+}
+
 static gboolean on_key_pressed(GtkEventControllerKey *ctrl, guint keyval,
                                 guint keycode, GdkModifierType state, gpointer data) {
     (void)ctrl; (void)keycode;
@@ -551,13 +797,17 @@ static gboolean on_key_pressed(GtkEventControllerKey *ctrl, guint keyval,
         /* Editing in data pane */
         if (!win->editing_ascii && win->cursor_pos <= win->data_len) {
             /* Auto-grow buffer if cursor is at end */
+            gboolean was_insert = FALSE;
             if (win->cursor_pos == win->data_len) {
                 if (win->data_len >= win->data_alloc) {
-                    win->data_alloc = win->data_alloc ? win->data_alloc * 2 : 4096;
+                    gsize na = win->data_alloc ? win->data_alloc * 2 : 4096;
+                    if (na <= win->data_alloc) return TRUE;
+                    win->data_alloc = na;
                     win->data = g_realloc(win->data, win->data_alloc);
                 }
                 win->data[win->data_len] = 0;
                 win->data_len++;
+                was_insert = TRUE;
             }
             if (win->settings.display_mode == 1) {
                 /* Binary mode: accept 0 and 1 */
@@ -565,12 +815,14 @@ static gboolean on_key_pressed(GtkEventControllerKey *ctrl, guint keyval,
                 if (keyval == GDK_KEY_0) bv = 0;
                 else if (keyval == GDK_KEY_1) bv = 1;
                 if (bv >= 0) {
-                    unsigned char b = win->data[win->cursor_pos];
+                    unsigned char old = win->data[win->cursor_pos];
+                    unsigned char b = old;
                     int bit = 7 - win->cursor_nibble;
                     if (bv)
                         b |= (unsigned char)(1 << bit);
                     else
                         b &= (unsigned char)~(1 << bit);
+                    undo_push(win, win->cursor_pos, old, b, was_insert);
                     win->data[win->cursor_pos] = b;
                     win->cursor_nibble++;
                     if (win->cursor_nibble >= 8) {
@@ -586,13 +838,16 @@ static gboolean on_key_pressed(GtkEventControllerKey *ctrl, guint keyval,
                 /* Hex mode */
                 int hv = hex_char_value(keyval);
                 if (hv >= 0) {
-                    unsigned char b = win->data[win->cursor_pos];
+                    unsigned char old = win->data[win->cursor_pos];
+                    unsigned char b = old;
                     if (win->cursor_nibble == 0) {
                         b = (unsigned char)((hv << 4) | (b & 0x0F));
+                        undo_push(win, win->cursor_pos, old, b, was_insert);
                         win->data[win->cursor_pos] = b;
                         win->cursor_nibble = 1;
                     } else {
                         b = (unsigned char)((b & 0xF0) | hv);
+                        undo_push(win, win->cursor_pos, old, b, was_insert);
                         win->data[win->cursor_pos] = b;
                         win->cursor_nibble = 0;
                         win->cursor_pos++;
@@ -608,14 +863,20 @@ static gboolean on_key_pressed(GtkEventControllerKey *ctrl, guint keyval,
         /* ASCII editing */
         if (win->editing_ascii &&
             keyval >= 0x20 && keyval <= 0x7E && win->cursor_pos <= win->data_len) {
+            gboolean ascii_insert = FALSE;
             if (win->cursor_pos == win->data_len) {
                 if (win->data_len >= win->data_alloc) {
-                    win->data_alloc = win->data_alloc ? win->data_alloc * 2 : 4096;
+                    gsize na = win->data_alloc ? win->data_alloc * 2 : 4096;
+                    if (na <= win->data_alloc) return TRUE;
+                    win->data_alloc = na;
                     win->data = g_realloc(win->data, win->data_alloc);
                 }
                 win->data[win->data_len] = 0;
                 win->data_len++;
+                ascii_insert = TRUE;
             }
+            unsigned char old = win->data[win->cursor_pos];
+            undo_push(win, win->cursor_pos, old, (unsigned char)keyval, ascii_insert);
             win->data[win->cursor_pos] = (unsigned char)keyval;
             set_byte_dirty(win);
             if (win->cursor_pos < win->data_len)
@@ -661,6 +922,14 @@ static void on_scroll(GtkEventControllerScroll *ctrl, double dx, double dy, gpoi
 }
 
 /* Click to position cursor */
+static void on_entropy_clicked(GtkGestureClick *gesture, int n_press,
+                                double x, double y, gpointer data) {
+    (void)gesture; (void)n_press; (void)y;
+    HexWindow *win = data;
+    int width = gtk_widget_get_width(GTK_WIDGET(win->entropy_bar));
+    analysis_entropy_clicked(win, x, width);
+}
+
 static void on_click_pressed(GtkGestureClick *gesture, int n_press,
                               double x, double y, gpointer data) {
     (void)gesture; (void)n_press;
@@ -714,10 +983,10 @@ static void on_click_pressed(GtkGestureClick *gesture, int n_press,
 /* ── File operations ── */
 
 void hex_window_load_file(HexWindow *win, const char *path) {
-    if (!path || path[0] == '\0') { fprintf(stderr, "load_file: empty path\n"); return; }
+    if (!path || path[0] == '\0') return;
 
     struct stat st;
-    if (g_stat(path, &st) != 0) { fprintf(stderr, "load_file: stat failed for '%s'\n", path); return; }
+    if (g_stat(path, &st) != 0) return;
     gsize file_size = (gsize)st.st_size;
 
     /* Limit to 64 MB for responsiveness */
@@ -761,6 +1030,8 @@ void hex_window_load_file(HexWindow *win, const char *path) {
     win->selection_start = 0;
     win->selection_end = 0;
     win->editing_ascii = FALSE;
+    win->undo_pos = 0;
+    win->undo_count = 0;
 
     /* path may alias win->settings.last_file, so copy to local first */
     char path_copy[2048];
@@ -770,6 +1041,7 @@ void hex_window_load_file(HexWindow *win, const char *path) {
     hex_settings_save(&win->settings);
 
     update_title(win);
+    analysis_recalc_entropy(win);
     hex_window_queue_redraw(win);
 }
 
@@ -896,7 +1168,106 @@ static void on_search_changed(GtkEditable *editable, gpointer data) {
 
 static void on_close_search(HexWindow *win) {
     gtk_widget_set_visible(win->search_bar, FALSE);
+    gtk_widget_set_visible(win->replace_box, FALSE);
     gtk_widget_grab_focus(GTK_WIDGET(win->hex_view));
+}
+
+void hex_window_show_find_replace(HexWindow *win) {
+    gtk_widget_set_visible(win->search_bar, TRUE);
+    gtk_widget_set_visible(win->replace_box, TRUE);
+    gtk_widget_grab_focus(win->search_entry);
+}
+
+static void on_replace(GtkButton *btn, gpointer data) {
+    (void)btn;
+    HexWindow *win = data;
+    if (win->match_count <= 0 || win->match_current < 0 ||
+        win->match_current >= win->match_count) {
+        do_search(win);
+        return;
+    }
+
+    const char *rtext = gtk_editable_get_text(GTK_EDITABLE(win->replace_entry));
+    if (!rtext) return;
+    unsigned char *rbytes;
+    int rlen;
+    parse_hex_string(rtext, &rbytes, &rlen);
+    if (!rbytes || rlen <= 0) { g_free(rbytes); return; }
+
+    /* Get current search pattern length */
+    const char *stext = gtk_editable_get_text(GTK_EDITABLE(win->search_entry));
+    unsigned char *sbytes;
+    int slen;
+    parse_hex_string(stext, &sbytes, &slen);
+    g_free(sbytes);
+
+    if (slen != rlen) {
+        g_free(rbytes);
+        gtk_label_set_text(win->match_label, "Length mismatch!");
+        return;
+    }
+
+    gsize pos = win->match_offsets[win->match_current];
+    for (int i = 0; i < rlen && pos + (gsize)i < win->data_len; i++) {
+        undo_push(win, pos + (gsize)i, win->data[pos + (gsize)i], rbytes[i], FALSE);
+        win->data[pos + (gsize)i] = rbytes[i];
+    }
+    g_free(rbytes);
+    set_byte_dirty(win);
+
+    /* Re-search and advance */
+    do_search(win);
+    hex_window_queue_redraw(win);
+}
+
+static void on_replace_all(GtkButton *btn, gpointer data) {
+    (void)btn;
+    HexWindow *win = data;
+    do_search(win);
+    if (win->match_count <= 0) return;
+
+    const char *rtext = gtk_editable_get_text(GTK_EDITABLE(win->replace_entry));
+    if (!rtext) return;
+    unsigned char *rbytes;
+    int rlen;
+    parse_hex_string(rtext, &rbytes, &rlen);
+    if (!rbytes || rlen <= 0) { g_free(rbytes); return; }
+
+    const char *stext = gtk_editable_get_text(GTK_EDITABLE(win->search_entry));
+    unsigned char *sbytes;
+    int slen;
+    parse_hex_string(stext, &sbytes, &slen);
+    g_free(sbytes);
+
+    if (slen != rlen) {
+        g_free(rbytes);
+        gtk_label_set_text(win->match_label, "Length mismatch!");
+        return;
+    }
+
+    int replaced = 0;
+    for (int m = 0; m < win->match_count; m++) {
+        gsize pos = win->match_offsets[m];
+        for (int i = 0; i < rlen && pos + (gsize)i < win->data_len; i++) {
+            undo_push(win, pos + (gsize)i, win->data[pos + (gsize)i], rbytes[i], FALSE);
+            win->data[pos + (gsize)i] = rbytes[i];
+        }
+        replaced++;
+    }
+    g_free(rbytes);
+    set_byte_dirty(win);
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Replaced %d", replaced);
+    gtk_label_set_text(win->match_label, buf);
+
+    /* Clear matches since they're now replaced */
+    g_free(win->match_offsets);
+    win->match_offsets = NULL;
+    win->match_count = 0;
+    win->match_current = -1;
+
+    hex_window_queue_redraw(win);
 }
 
 static void on_goto_entry_activate(GtkEntry *e, gpointer d) {
@@ -1124,6 +1495,8 @@ static void on_window_destroy(GtkWidget *widget, gpointer data) {
     g_free(win->data);
     g_free(win->original_data);
     g_free(win->match_offsets);
+    g_free(win->undo_stack);
+    g_free(win->entropy_data);
     g_free(win);
 }
 
@@ -1203,8 +1576,13 @@ HexWindow *hex_window_new(GtkApplication *app) {
     g_menu_append(menu, "Save As...", "win.save-as");
 
     GMenu *edit_section = g_menu_new();
+    g_menu_append(edit_section, "Undo", "win.undo");
+    g_menu_append(edit_section, "Redo", "win.redo");
+    g_menu_append(edit_section, "Copy", "win.copy");
+    g_menu_append(edit_section, "Paste", "win.paste");
     g_menu_append(edit_section, "Go to Offset...", "win.goto-offset");
     g_menu_append(edit_section, "Find...", "win.find");
+    g_menu_append(edit_section, "Find & Replace...", "win.find-replace");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(edit_section));
     g_object_unref(edit_section);
 
@@ -1221,6 +1599,13 @@ HexWindow *hex_window_new(GtkApplication *app) {
     g_menu_append(ssh_section, "SSH Disconnect", "win.sftp-disconnect");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(ssh_section));
     g_object_unref(ssh_section);
+
+    GMenu *analysis_section = g_menu_new();
+    g_menu_append(analysis_section, "Byte Frequency...", "win.byte-frequency");
+    g_menu_append(analysis_section, "Extract Strings...", "win.extract-strings");
+    g_menu_append(analysis_section, "Checksums...", "win.checksums");
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(analysis_section));
+    g_object_unref(analysis_section);
 
     GMenu *settings_section = g_menu_new();
     g_menu_append(settings_section, "Settings...", "win.settings");
@@ -1276,9 +1661,42 @@ HexWindow *hex_window_new(GtkApplication *app) {
         G_CALLBACK(on_close_search), win);
     gtk_box_append(GTK_BOX(win->search_bar), close_search_btn);
 
-    gtk_box_append(GTK_BOX(vbox), win->search_bar);
+    /* Replace bar (hidden by default) */
+    win->replace_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_margin_start(win->replace_box, 8);
+    gtk_widget_set_margin_end(win->replace_box, 8);
+    gtk_widget_set_margin_bottom(win->replace_box, 4);
+    gtk_widget_set_visible(win->replace_box, FALSE);
 
-    /* Content area: hex view + scrollbar */
+    GtkWidget *replace_label = gtk_label_new("Replace (hex or text):");
+    gtk_box_append(GTK_BOX(win->replace_box), replace_label);
+
+    win->replace_entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(win->replace_entry), "e.g. 00 00 or world");
+    gtk_widget_set_hexpand(win->replace_entry, TRUE);
+    gtk_box_append(GTK_BOX(win->replace_box), win->replace_entry);
+
+    GtkWidget *replace_btn = gtk_button_new_with_label("Replace");
+    g_signal_connect(replace_btn, "clicked", G_CALLBACK(on_replace), win);
+    gtk_box_append(GTK_BOX(win->replace_box), replace_btn);
+
+    GtkWidget *replace_all_btn = gtk_button_new_with_label("Replace All");
+    g_signal_connect(replace_all_btn, "clicked", G_CALLBACK(on_replace_all), win);
+    gtk_box_append(GTK_BOX(win->replace_box), replace_all_btn);
+
+    gtk_box_append(GTK_BOX(vbox), win->search_bar);
+    gtk_box_append(GTK_BOX(vbox), win->replace_box);
+
+    /* Entropy bar */
+    win->entropy_bar = GTK_DRAWING_AREA(gtk_drawing_area_new());
+    gtk_widget_set_size_request(GTK_WIDGET(win->entropy_bar), -1, 16);
+    gtk_drawing_area_set_draw_func(win->entropy_bar, analysis_draw_entropy, win, NULL);
+    GtkGesture *entropy_click = gtk_gesture_click_new();
+    g_signal_connect(entropy_click, "pressed", G_CALLBACK(on_entropy_clicked), win);
+    gtk_widget_add_controller(GTK_WIDGET(win->entropy_bar), GTK_EVENT_CONTROLLER(entropy_click));
+    gtk_box_append(GTK_BOX(vbox), GTK_WIDGET(win->entropy_bar));
+
+    /* Content area: hex view + inspector */
     GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_set_vexpand(hbox, TRUE);
     gtk_box_append(GTK_BOX(vbox), hbox);
@@ -1291,6 +1709,33 @@ HexWindow *hex_window_new(GtkApplication *app) {
     gtk_widget_set_focusable(GTK_WIDGET(win->hex_view), TRUE);
     gtk_drawing_area_set_draw_func(win->hex_view, draw_hex_view, win, NULL);
     gtk_box_append(GTK_BOX(hbox), GTK_WIDGET(win->hex_view));
+
+    /* Data Inspector panel */
+    win->inspector_panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_size_request(win->inspector_panel, 180, -1);
+    gtk_widget_set_margin_start(win->inspector_panel, 4);
+    gtk_widget_set_margin_end(win->inspector_panel, 8);
+    gtk_widget_set_margin_top(win->inspector_panel, 4);
+
+    GtkWidget *insp_title = gtk_label_new("Data Inspector");
+    gtk_widget_add_css_class(insp_title, "heading");
+    gtk_label_set_xalign(GTK_LABEL(insp_title), 0);
+    gtk_box_append(GTK_BOX(win->inspector_panel), insp_title);
+
+    GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_box_append(GTK_BOX(win->inspector_panel), sep);
+
+    win->inspector_label = GTK_LABEL(gtk_label_new("No data"));
+    gtk_label_set_xalign(GTK_LABEL(win->inspector_label), 0);
+    gtk_label_set_yalign(GTK_LABEL(win->inspector_label), 0);
+    gtk_widget_set_vexpand(GTK_WIDGET(win->inspector_label), TRUE);
+    gtk_label_set_selectable(GTK_LABEL(win->inspector_label), TRUE);
+    gtk_box_append(GTK_BOX(win->inspector_panel), GTK_WIDGET(win->inspector_label));
+
+    gtk_box_append(GTK_BOX(hbox), win->inspector_panel);
+    /* Hide inspector in binary mode */
+    if (win->settings.display_mode == 1)
+        gtk_widget_set_visible(win->inspector_panel, FALSE);
 
 
     /* Keyboard input */
@@ -1339,15 +1784,16 @@ HexWindow *hex_window_new(GtkApplication *app) {
     /* Apply settings */
     hex_window_apply_settings(win);
 
+    /* Disable SSH actions until connected */
+    update_ssh_status(win);
+
     /* Save window size on close */
     g_signal_connect(win->window, "close-request", G_CALLBACK(on_close_request), win);
     g_signal_connect(win->window, "destroy", G_CALLBACK(on_window_destroy), win);
 
     /* Load last file */
-    fprintf(stderr, "before load: last_file='%s'\n", win->settings.last_file);
     if (win->settings.last_file[0])
         hex_window_load_file(win, win->settings.last_file);
-    fprintf(stderr, "after load: last_file='%s'\n", win->settings.last_file);
 
     gtk_widget_grab_focus(GTK_WIDGET(win->hex_view));
     return win;

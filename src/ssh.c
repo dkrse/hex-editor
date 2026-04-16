@@ -25,8 +25,8 @@ const char *ssh_to_remote_path(const char *ssh_mount, const char *ssh_remote_pat
 
     const char *suffix = local_path + mlen;
 
-    /* Reject path traversal attempts */
-    if (strstr(suffix, "/../") || strstr(suffix, "/..") == suffix + strlen(suffix) - 3) {
+    /* Reject path traversal attempts — reject any ".." component */
+    if (strstr(suffix, "..") || strstr(suffix, "//")) {
         snprintf(buf, buflen, "%s", ssh_remote_path);
         return buf;
     }
@@ -37,9 +37,20 @@ const char *ssh_to_remote_path(const char *ssh_mount, const char *ssh_remote_pat
 
 /* ── SSH argv builder ── */
 
+/* Reject characters that could confuse SSH argument parsing */
+static gboolean ssh_validate_str(const char *s, gsize maxlen) {
+    if (!s || !s[0] || strlen(s) > maxlen) return FALSE;
+    for (const char *p = s; *p; p++) {
+        if (*p == '\n' || *p == '\r' || *p == '\0') return FALSE;
+    }
+    return TRUE;
+}
+
 GPtrArray *ssh_argv_new(const char *host, const char *user, int port,
                         const char *key, const char *ctl_path) {
     GPtrArray *av = g_ptr_array_new_with_free_func(g_free);
+    if (!ssh_validate_str(host, 255) || !ssh_validate_str(user, 128))
+        return av; /* return empty argv */
     g_ptr_array_add(av, g_strdup("ssh"));
     g_ptr_array_add(av, g_strdup("-p"));
     g_ptr_array_add(av, g_strdup_printf("%d", port));

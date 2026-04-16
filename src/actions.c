@@ -1,8 +1,10 @@
 #include "actions.h"
 #include "ssh.h"
+#include "analysis.h"
 #include <adwaita.h>
 #include <glib/gstdio.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -53,6 +55,8 @@ static void on_new_file(GSimpleAction *action, GVariant *param, gpointer data) {
     win->scroll_offset = 0;
     win->selection_start = 0;
     win->selection_end = 0;
+    win->undo_pos = 0;
+    win->undo_count = 0;
     win->current_file[0] = '\0';
     win->settings.last_file[0] = '\0';
     hex_settings_save(&win->settings);
@@ -167,9 +171,34 @@ static void on_open_file(GSimpleAction *action, GVariant *param, gpointer data) 
     gtk_file_dialog_open(dialog, GTK_WINDOW(win->window), NULL, on_open_file_cb, win);
 }
 
+static void on_undo(GSimpleAction *action, GVariant *param, gpointer data) {
+    (void)action; (void)param;
+    hex_window_undo(data);
+}
+
+static void on_redo(GSimpleAction *action, GVariant *param, gpointer data) {
+    (void)action; (void)param;
+    hex_window_redo(data);
+}
+
+static void on_copy(GSimpleAction *action, GVariant *param, gpointer data) {
+    (void)action; (void)param;
+    hex_window_copy(data);
+}
+
+static void on_paste(GSimpleAction *action, GVariant *param, gpointer data) {
+    (void)action; (void)param;
+    hex_window_paste(data);
+}
+
 static void on_find(GSimpleAction *action, GVariant *param, gpointer data) {
     (void)action; (void)param;
     hex_window_show_search(data);
+}
+
+static void on_find_replace(GSimpleAction *action, GVariant *param, gpointer data) {
+    (void)action; (void)param;
+    hex_window_show_find_replace(data);
 }
 
 static void on_goto_offset(GSimpleAction *action, GVariant *param, gpointer data) {
@@ -182,6 +211,9 @@ static void on_toggle_binary(GSimpleAction *action, GVariant *param, gpointer da
     HexWindow *win = data;
     win->settings.display_mode = win->settings.display_mode == 0 ? 1 : 0;
     win->cursor_nibble = 0;
+    /* Hide inspector in binary mode — too wide */
+    if (win->inspector_panel)
+        gtk_widget_set_visible(win->inspector_panel, win->settings.display_mode == 0);
     hex_window_apply_settings(win);
     hex_settings_save(&win->settings);
 }
@@ -618,8 +650,10 @@ static void on_sftp_connect(GtkButton *btn, gpointer data) {
     if (!host[0] || !user[0]) return;
     if (!remote[0]) remote = "/";
 
-    int port = atoi(port_str[0] ? port_str : "22");
-    if (port <= 0) port = 22;
+    char *endptr = NULL;
+    long port_val = strtol(port_str[0] ? port_str : "22", &endptr, 10);
+    int port = (port_val > 0 && port_val <= 65535 && endptr && *endptr == '\0')
+               ? (int)port_val : 22;
 
     gtk_widget_set_sensitive(GTK_WIDGET(btn), FALSE);
     gtk_button_set_label(btn, "Connecting...");
@@ -883,11 +917,8 @@ static void remote_browse_populate(OpenRemoteCtx *ctx) {
     g_ptr_array_add(av, g_strdup("-1pA"));
     g_ptr_array_add(av, g_strdup(ctx->current_dir));
 
-    fprintf(stderr, "remote_browse: dir='%s' host='%s' user='%s' ctl='%s'\n",
-            ctx->current_dir, ctx->win->ssh_host, ctx->win->ssh_user, ctx->win->ssh_ctl_path);
     char *stdout_buf = NULL;
     gboolean ok = ssh_spawn_sync(av, &stdout_buf, NULL);
-    fprintf(stderr, "remote_browse: ok=%d buf_len=%zd\n", ok, stdout_buf ? (ssize_t)strlen(stdout_buf) : -1);
     g_ptr_array_unref(av);
 
     if (strcmp(ctx->current_dir, "/") != 0) {
@@ -900,10 +931,7 @@ static void remote_browse_populate(OpenRemoteCtx *ctx) {
     }
 
     if (!ok || !stdout_buf) {
-        char errmsg[256];
-        snprintf(errmsg, sizeof(errmsg), "(failed to list: %s — ok=%d, buf=%p)",
-                 ctx->current_dir, ok, (void*)stdout_buf);
-        GtkWidget *lbl = gtk_label_new(errmsg);
+        GtkWidget *lbl = gtk_label_new("(failed to list directory)");
         gtk_list_box_append(ctx->file_list, lbl);
         g_free(stdout_buf);
         return;
@@ -1008,6 +1036,23 @@ static void on_sftp_disconnect(GSimpleAction *action, GVariant *param, gpointer 
     hex_window_ssh_disconnect(win);
 }
 
+/* ── Analysis actions ── */
+
+static void on_byte_frequency(GSimpleAction *action, GVariant *param, gpointer data) {
+    (void)action; (void)param;
+    analysis_show_byte_frequency(data);
+}
+
+static void on_extract_strings(GSimpleAction *action, GVariant *param, gpointer data) {
+    (void)action; (void)param;
+    analysis_show_strings(data);
+}
+
+static void on_checksums(GSimpleAction *action, GVariant *param, gpointer data) {
+    (void)action; (void)param;
+    analysis_show_checksums(data);
+}
+
 /* ── Register all actions ── */
 
 void hex_actions_setup(HexWindow *win, GtkApplication *app) {
@@ -1017,7 +1062,12 @@ void hex_actions_setup(HexWindow *win, GtkApplication *app) {
         {"open-file",       on_open_file,       NULL, NULL, NULL, {0}},
         {"save",            on_save,            NULL, NULL, NULL, {0}},
         {"save-as",         on_save_as,         NULL, NULL, NULL, {0}},
+        {"undo",            on_undo,            NULL, NULL, NULL, {0}},
+        {"redo",            on_redo,            NULL, NULL, NULL, {0}},
+        {"copy",            on_copy,            NULL, NULL, NULL, {0}},
+        {"paste",           on_paste,           NULL, NULL, NULL, {0}},
         {"find",            on_find,            NULL, NULL, NULL, {0}},
+        {"find-replace",    on_find_replace,    NULL, NULL, NULL, {0}},
         {"goto-offset",     on_goto_offset,     NULL, NULL, NULL, {0}},
         {"toggle-binary",   on_toggle_binary,   NULL, NULL, NULL, {0}},
         {"zoom-in",         on_zoom_in,         NULL, NULL, NULL, {0}},
@@ -1026,6 +1076,9 @@ void hex_actions_setup(HexWindow *win, GtkApplication *app) {
         {"sftp-connect",    on_sftp_dialog,     NULL, NULL, NULL, {0}},
         {"sftp-disconnect", on_sftp_disconnect, NULL, NULL, NULL, {0}},
         {"open-remote",     on_open_remote,     NULL, NULL, NULL, {0}},
+        {"byte-frequency",  on_byte_frequency,  NULL, NULL, NULL, {0}},
+        {"extract-strings", on_extract_strings, NULL, NULL, NULL, {0}},
+        {"checksums",       on_checksums,       NULL, NULL, NULL, {0}},
     };
 
     g_action_map_add_action_entries(G_ACTION_MAP(win->window), win_entries,
@@ -1036,7 +1089,12 @@ void hex_actions_setup(HexWindow *win, GtkApplication *app) {
     const char *accels_save[]   = {"<Ctrl>s", NULL};
     const char *accels_saveas[] = {"<Ctrl><Shift>s", NULL};
     const char *accels_new[]    = {"<Ctrl>n", NULL};
+    const char *accels_undo[]   = {"<Ctrl>z", NULL};
+    const char *accels_redo[]   = {"<Ctrl><Shift>z", NULL};
+    const char *accels_copy[]   = {"<Ctrl>c", NULL};
+    const char *accels_paste[]  = {"<Ctrl>v", NULL};
     const char *accels_find[]   = {"<Ctrl>f", NULL};
+    const char *accels_frepl[]  = {"<Ctrl>h", NULL};
     const char *accels_goto[]   = {"<Ctrl>g", NULL};
     const char *accels_zin[]    = {"<Ctrl>plus", "<Ctrl>equal", NULL};
     const char *accels_zout[]   = {"<Ctrl>minus", NULL};
@@ -1048,7 +1106,12 @@ void hex_actions_setup(HexWindow *win, GtkApplication *app) {
     gtk_application_set_accels_for_action(app, "win.save",        accels_save);
     gtk_application_set_accels_for_action(app, "win.save-as",     accels_saveas);
     gtk_application_set_accels_for_action(app, "win.new-file",    accels_new);
+    gtk_application_set_accels_for_action(app, "win.undo",        accels_undo);
+    gtk_application_set_accels_for_action(app, "win.redo",        accels_redo);
+    gtk_application_set_accels_for_action(app, "win.copy",        accels_copy);
+    gtk_application_set_accels_for_action(app, "win.paste",       accels_paste);
     gtk_application_set_accels_for_action(app, "win.find",        accels_find);
+    gtk_application_set_accels_for_action(app, "win.find-replace",accels_frepl);
     gtk_application_set_accels_for_action(app, "win.goto-offset", accels_goto);
     gtk_application_set_accels_for_action(app, "win.zoom-in",     accels_zin);
     gtk_application_set_accels_for_action(app, "win.zoom-out",    accels_zout);

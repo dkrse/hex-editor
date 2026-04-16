@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.2.0 — 2026-04-16
+
+### Editing Features
+- Undo/Redo (Ctrl+Z / Ctrl+Shift+Z) — per-byte undo stack with insert tracking
+- Copy (Ctrl+C) — copies selection as hex string (`FF D8 FF`)
+- Paste (Ctrl+V) — parses hex or ASCII text from clipboard
+- Find & Replace (Ctrl+H) — replace current match or replace all (same-length patterns)
+
+### Analysis Features
+- **Entropy visualization** — color bar below search bar showing Shannon entropy per block across the file; blue = low entropy, green = medium, red = high (compressed/encrypted); click to navigate
+- **Byte frequency histogram** — dialog with 256-bar chart and top-10 most frequent bytes
+- **Strings extraction** — dialog listing all printable ASCII strings (min 4 chars) with offsets; click to navigate and select
+- **Checksums** — CRC32, MD5, SHA1, SHA256 of file or selection with Copy All button
+
+### Display Features
+- **Data Inspector** — right panel showing cursor value as int8, int16/32/64 LE/BE, float LE, double LE; auto-detects file magic bytes (PNG, JPEG, PDF, ELF, ZIP, GZIP, GIF, BMP, RIFF, MP4, PE, Mach-O, XML, ICO)
+- **Diff indicator** — offset column turns red for rows containing modified bytes
+- Data Inspector auto-hides in binary display mode
+
+### Security Fixes
+- **CRITICAL**: Fixed buffer overflow in `hex_window_copy` — `g_malloc(count*3)` → `g_malloc(count*3+1)` with `snprintf`
+- **CRITICAL**: Fixed integer overflow in auto-grow buffer — added overflow guards on all 3 allocation paths (hex, binary, ASCII editing + paste)
+- **CRITICAL**: Strengthened SSH path traversal check — now rejects any `..` or `//` in path suffix
+- **HIGH**: Fixed out-of-bounds write in paste — zero-fills gap between `data_len` and target position
+- **HIGH**: Fixed `match_current` bounds check in Find & Replace — prevents out-of-bounds read on `match_offsets`
+- **HIGH**: Replaced `atoi` with `strtol` for SSH port validation — validates range 1-65535
+- **MEDIUM**: Added SSH host/user input validation — `ssh_validate_str()` rejects empty, overlong, and newline-containing strings
+- **MEDIUM**: Replaced O(n²) bubble sort with `qsort` in byte frequency analysis
+
+### Bug Fixes
+- Removed all debug `fprintf(stderr)` statements
+- SSH actions (Open Remote, Disconnect) disabled at startup when not connected
+
 ## v1.1.1 — 2026-04-16
 
 ### Bug Fixes
