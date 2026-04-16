@@ -282,6 +282,7 @@ static void update_title(HexWindow *win) {
 void hex_window_queue_redraw(HexWindow *win) {
     gtk_widget_queue_draw(GTK_WIDGET(win->hex_view));
     update_status(win);
+    update_scroll_percent(win);
 }
 
 /* ── Drawing ── */
@@ -296,9 +297,6 @@ static void draw_hex_view(GtkDrawingArea *area, cairo_t *cr,
 
     win->visible_rows = height / win->row_height;
     if (win->visible_rows < 1) win->visible_rows = 1;
-
-    /* Update scroll percentage */
-    update_scroll_percent(win);
 
     /* Get colors */
     const char *fg_str, *bg_str;
@@ -716,10 +714,10 @@ static void on_click_pressed(GtkGestureClick *gesture, int n_press,
 /* ── File operations ── */
 
 void hex_window_load_file(HexWindow *win, const char *path) {
-    if (!path || path[0] == '\0') return;
+    if (!path || path[0] == '\0') { fprintf(stderr, "load_file: empty path\n"); return; }
 
     struct stat st;
-    if (g_stat(path, &st) != 0) return;
+    if (g_stat(path, &st) != 0) { fprintf(stderr, "load_file: stat failed for '%s'\n", path); return; }
     gsize file_size = (gsize)st.st_size;
 
     /* Limit to 64 MB for responsiveness */
@@ -728,23 +726,32 @@ void hex_window_load_file(HexWindow *win, const char *path) {
     FILE *fp = fopen(path, "rb");
     if (!fp) return;
 
-    unsigned char *buf = g_malloc(file_size);
-    gsize len = fread(buf, 1, file_size, fp);
-    gboolean read_err = ferror(fp);
-    fclose(fp);
-
-    if (read_err || len == 0) {
-        g_free(buf);
-        return;
+    unsigned char *buf = NULL;
+    gsize len = 0;
+    if (file_size > 0) {
+        buf = g_malloc(file_size);
+        len = fread(buf, 1, file_size, fp);
+        gboolean read_err = ferror(fp);
+        fclose(fp);
+        if (read_err) {
+            g_free(buf);
+            return;
+        }
+    } else {
+        fclose(fp);
     }
 
     g_free(win->data);
     g_free(win->original_data);
 
+    gsize alloc = len > 0 ? len : 4096;
+    if (len == 0) {
+        buf = g_malloc0(alloc);
+    }
     win->data = buf;
     win->data_len = len;
-    win->data_alloc = len;
-    win->original_data = g_memdup2(buf, len);
+    win->data_alloc = alloc;
+    win->original_data = len > 0 ? g_memdup2(buf, len) : NULL;
     win->original_len = len;
     win->dirty = FALSE;
 
@@ -755,8 +762,11 @@ void hex_window_load_file(HexWindow *win, const char *path) {
     win->selection_end = 0;
     win->editing_ascii = FALSE;
 
-    snprintf(win->current_file, sizeof(win->current_file), "%s", path);
-    snprintf(win->settings.last_file, sizeof(win->settings.last_file), "%s", path);
+    /* path may alias win->settings.last_file, so copy to local first */
+    char path_copy[2048];
+    g_strlcpy(path_copy, path, sizeof(path_copy));
+    snprintf(win->current_file, sizeof(win->current_file), "%s", path_copy);
+    snprintf(win->settings.last_file, sizeof(win->settings.last_file), "%s", path_copy);
     hex_settings_save(&win->settings);
 
     update_title(win);
@@ -1334,8 +1344,10 @@ HexWindow *hex_window_new(GtkApplication *app) {
     g_signal_connect(win->window, "destroy", G_CALLBACK(on_window_destroy), win);
 
     /* Load last file */
+    fprintf(stderr, "before load: last_file='%s'\n", win->settings.last_file);
     if (win->settings.last_file[0])
         hex_window_load_file(win, win->settings.last_file);
+    fprintf(stderr, "after load: last_file='%s'\n", win->settings.last_file);
 
     gtk_widget_grab_focus(GTK_WIDGET(win->hex_view));
     return win;

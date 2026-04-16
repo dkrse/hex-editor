@@ -17,8 +17,8 @@ hex-editor/
 │   ├── hex-editor.svg    # Application icon (source)
 │   └── hex-editor.png    # Application icon (256x256)
 ├── src/
-│   ├── main.c            # Entry point, GApplication setup (30 lines)
-│   ├── window.c          # Window, hex rendering, input, SSH ops (1346 lines)
+│   ├── main.c            # Entry point, GApplication setup (37 lines)
+│   ├── window.c          # Window, hex rendering, input, SSH ops (1354 lines)
 │   ├── window.h          # HexWindow struct, public API
 │   ├── actions.c         # GAction handlers, dialogs, SFTP UI (1044 lines)
 │   ├── actions.h         # hex_actions_setup() declaration
@@ -31,25 +31,25 @@ hex-editor/
 
 ## Module Responsibilities
 
-### main.c (30 lines)
+### main.c (37 lines)
 - Creates `AdwApplication`
-- Connects `activate` signal to create the window
+- Connects `activate` signal to create the window (guards against duplicate activation)
 - Registers app-level actions (quit)
 
-### window.c (1346 lines)
+### window.c (1354 lines)
 Core of the application:
 
 - **Theme system** — 13 color themes, CSS generation, Adwaita style manager
 - **Hex rendering** — Custom `GtkDrawingArea` with Cairo/Pango. Renders offset column, hex/binary bytes, ASCII pane, cursor with cross-highlights, selection, modified-byte markers
 - **Input handling** — Key controller on the window for hex/binary/ASCII editing, navigation, selection. Auto-growing buffer for new files
-- **File I/O** — Load files up to 64 MB with error checking, atomic saves
+- **File I/O** — Load files up to 64 MB with error checking, atomic saves, alias-safe path handling for `last_file` persistence
 - **Search** — Hex pattern or ASCII text search with bounds-checked parsing
 - **Go to offset** — Dialog with errno-safe strtoull parsing
 - **Close protection** — Save/Discard/Cancel dialog via `close-request` signal
 - **Scroll percentage** — Virtual scrolling with mouse wheel, scroll position shown as percentage in status bar
 - **SSH operations** — Connect/disconnect, remote file open via `ssh cat`, remote save via `ssh tee`, SSH status button in header bar
 
-### actions.c (1044 lines)
+### actions.c (1056 lines)
 - All `GAction` entries (new, open, save, find, goto, zoom, toggle binary, settings, SSH connect/disconnect/open-remote)
 - Settings dialog (theme, fonts, bytes per row, ASCII, uppercase, display mode)
 - SFTP connection dialog with saved connections list, async SSH test

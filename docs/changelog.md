@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.1 — 2026-04-16
+
+### Bug Fixes
+- **MEDIUM**: Fixed `last_file` not persisting across restarts — `snprintf` overlapping source/destination buffer caused undefined behavior when reloading the last opened file from settings
+- Replaced scrollbar widget with scroll percentage indicator in status bar (scrollbar was invisible in GTK4 overlay mode)
+- Prevent duplicate window creation when `on_activate` is called multiple times by GApplication
+
 ## v1.1.0 — 2026-04-15
 
 ### SSH/SFTP Support

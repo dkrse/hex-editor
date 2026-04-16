@@ -883,8 +883,11 @@ static void remote_browse_populate(OpenRemoteCtx *ctx) {
     g_ptr_array_add(av, g_strdup("-1pA"));
     g_ptr_array_add(av, g_strdup(ctx->current_dir));
 
+    fprintf(stderr, "remote_browse: dir='%s' host='%s' user='%s' ctl='%s'\n",
+            ctx->current_dir, ctx->win->ssh_host, ctx->win->ssh_user, ctx->win->ssh_ctl_path);
     char *stdout_buf = NULL;
     gboolean ok = ssh_spawn_sync(av, &stdout_buf, NULL);
+    fprintf(stderr, "remote_browse: ok=%d buf_len=%zd\n", ok, stdout_buf ? (ssize_t)strlen(stdout_buf) : -1);
     g_ptr_array_unref(av);
 
     if (strcmp(ctx->current_dir, "/") != 0) {

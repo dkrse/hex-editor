@@ -36,8 +36,9 @@ void hex_settings_load(HexSettings *s) {
     s->last_file[0] = '\0';
 
     char *path = hex_settings_get_config_path();
+    g_message("settings_load: reading from '%s'", path);
     FILE *f = fopen(path, "r");
-    if (!f) return;
+    if (!f) { g_message("settings_load: file not found"); return; }
 
     char line[2048];
     while (fgets(line, sizeof(line), f)) {
@@ -80,9 +81,11 @@ void hex_settings_load(HexSettings *s) {
         #undef SAFE_COPY
     }
     fclose(f);
+    g_message("settings_load: last_file='%s'", s->last_file);
 }
 
 void hex_settings_save(const HexSettings *s) {
+    g_message("settings_save: last_file='%s'", s->last_file);
     ensure_config_dir();
     char *path = hex_settings_get_config_path();
 
